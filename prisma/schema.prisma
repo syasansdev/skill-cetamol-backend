@@ -1,0 +1,251 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id               String         @id @default(uuid())
+  name             String
+  email            String         @unique
+  password         String
+  role             String
+  status           String
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+  magicCode        String?
+  magicCodeExpires DateTime?
+  photoUrl         String?
+  activityLogs     ActivityLog[]
+  faculty          Faculty?
+  notifications    Notification[]
+  student          Student?
+}
+
+model Student {
+  id             String        @id @default(uuid())
+  userId         String        @unique
+  registerNumber String        @unique
+  departmentId   String
+  courseId       String
+  year           Int
+  phone          String?
+  address        String?
+  photoUrl       String?
+  results        Result[]
+  course         Course        @relation(fields: [courseId], references: [id])
+  department     Department    @relation(fields: [departmentId], references: [id])
+  user           User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  studentExams   StudentExam[]
+  notes          Note[]
+}
+
+model Faculty {
+  id                String             @id @default(uuid())
+  userId            String             @unique
+  departmentId      String
+  designation       String
+  experience        Int
+  exams             Exam[]
+  department        Department         @relation(fields: [departmentId], references: [id])
+  user              User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  questions         Question[]
+  portions          Portion[]
+  uploadedDocuments UploadedDocument[]
+}
+
+model Department {
+  id             String    @id @default(uuid())
+  departmentName String    @unique
+  courses        Course[]
+  faculty        Faculty[]
+  students       Student[]
+}
+
+model Course {
+  id           String     @id @default(uuid())
+  courseName   String     @unique
+  departmentId String
+  department   Department @relation(fields: [departmentId], references: [id], onDelete: Cascade)
+  students     Student[]
+  subjects     Subject[]
+}
+
+model Subject {
+  id                String             @id @default(uuid())
+  subjectName       String
+  courseId          String
+  semester          Int
+  exams             Exam[]
+  questions         Question[]
+  course            Course             @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  portions          Portion[]
+  notes             Note[]
+  uploadedDocuments UploadedDocument[]
+}
+
+model Question {
+  id                 String            @id @default(uuid())
+  question           String
+  type               String
+  difficulty         String
+  marks              Int
+  facultyId          String
+  subjectId          String
+  uploadedDocumentId String?
+  createdAt          DateTime          @default(now())
+  examQuestions      ExamQuestion[]
+  faculty            Faculty           @relation(fields: [facultyId], references: [id])
+  subject            Subject           @relation(fields: [subjectId], references: [id])
+  uploadedDocument   UploadedDocument? @relation(fields: [uploadedDocumentId], references: [id], onDelete: Cascade)
+  options            QuestionOption[]
+  studentAnswers     StudentAnswer[]
+}
+
+model QuestionOption {
+  id         String   @id @default(uuid())
+  questionId String
+  option     String
+  isCorrect  Boolean
+  question   Question @relation(fields: [questionId], references: [id], onDelete: Cascade)
+}
+
+model Exam {
+  id            String         @id @default(uuid())
+  title         String
+  description   String
+  subjectId     String
+  facultyId     String
+  duration      Int
+  totalMarks    Int
+  startDate     DateTime
+  endDate       DateTime
+  status        String
+  questionCount   Int            @default(10)
+  negativeMarking Boolean        @default(false)
+  marksPerQuestion Float         @default(1.0)
+  negativeMarks   Float          @default(0.0)
+  faculty       Faculty        @relation(fields: [facultyId], references: [id])
+  subject       Subject        @relation(fields: [subjectId], references: [id])
+  examQuestions ExamQuestion[]
+  results       Result[]
+  studentExams  StudentExam[]
+}
+
+model ExamQuestion {
+  id         String   @id @default(uuid())
+  examId     String
+  questionId String
+  exam       Exam     @relation(fields: [examId], references: [id], onDelete: Cascade)
+  question   Question @relation(fields: [questionId], references: [id], onDelete: Cascade)
+
+  @@unique([examId, questionId])
+}
+
+model StudentExam {
+  id             String          @id @default(uuid())
+  studentId      String
+  examId         String
+  startedAt      DateTime        @default(now())
+  submittedAt    DateTime?
+  status         String
+  score          Float           @default(0)
+  lockReason     String?
+  lockedAt       DateTime?
+  reentryAllowed Boolean         @default(false)
+  unlockedAt     DateTime?
+  warningCount   Int             @default(0)
+  timeRemaining  Int             @default(0)
+  studentAnswers StudentAnswer[]
+  exam           Exam            @relation(fields: [examId], references: [id], onDelete: Cascade)
+  student        Student         @relation(fields: [studentId], references: [id], onDelete: Cascade)
+
+  @@unique([studentId, examId])
+}
+
+model StudentAnswer {
+  id                String      @id @default(uuid())
+  studentExamId     String
+  questionId        String
+  selectedOption    String?
+  answerText        String?
+  marksAwarded      Float       @default(0)
+  isMarkedForReview Boolean     @default(false)
+  question          Question    @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  studentExam       StudentExam @relation(fields: [studentExamId], references: [id], onDelete: Cascade)
+}
+
+model Result {
+  id         String  @id @default(uuid())
+  studentId  String
+  examId     String
+  percentage Float
+  rank       Int?
+  grade      String?
+  status     String
+  exam       Exam    @relation(fields: [examId], references: [id], onDelete: Cascade)
+  student    Student @relation(fields: [studentId], references: [id], onDelete: Cascade)
+
+  @@unique([studentId, examId])
+}
+
+model Notification {
+  id        String   @id @default(uuid())
+  title     String
+  message   String
+  userId    String
+  read      Boolean  @default(false)
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model ActivityLog {
+  id        String   @id @default(uuid())
+  userId    String
+  action    String
+  timestamp DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model Portion {
+  id          String   @id @default(uuid())
+  title       String
+  description String
+  subjectId   String
+  subject     Subject  @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+  facultyId   String
+  faculty     Faculty  @relation(fields: [facultyId], references: [id], onDelete: Cascade)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model Note {
+  id        String   @id @default(uuid())
+  title     String
+  content   String?
+  fileUrl   String?
+  fileName  String?
+  studentId String
+  student   Student  @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  subjectId String
+  subject   Subject  @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+}
+
+model UploadedDocument {
+  id        String     @id @default(uuid())
+  name      String
+  fileUrl   String
+  fileType  String     // 'pdf' | 'docx' | 'csv'
+  facultyId String
+  subjectId String
+  createdAt DateTime   @default(now())
+  
+  faculty   Faculty    @relation(fields: [facultyId], references: [id], onDelete: Cascade)
+  subject   Subject    @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+  questions Question[]
+}
+

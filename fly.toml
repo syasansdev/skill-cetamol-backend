@@ -1,0 +1,26 @@
+# fly.toml app configuration file generated for skillbill-backend on 2026-07-31T09:02:57+05:30
+#
+# See https://fly.io/docs/reference/configuration/ for information about how to use this file.
+#
+
+app = 'skillbill-backend'
+primary_region = 'sin'
+
+
+[build]
+[deploy]
+#   release_command = 'npx prisma migrate deploy'
+
+[http_service]
+  internal_port = 5000
+  force_https = true
+  auto_stop_machines = 'stop'
+  auto_start_machines = true
+  min_machines_running = 0
+  processes = ['app']
+
+[[vm]]
+  size = "shared-cpu-2x"
+  memory_mb = 2048
+
+
