@@ -81,18 +81,20 @@ export const StudentController = {
         // Randomize questions for this student attempt
         const attemptSeed = attempt ? new Date(attempt.startedAt).getTime() : Date.now();
         const seedStr = `${student.id}-${exam.id}-${attemptSeed}`;
-        const shuffledEqs = pseudoRandomShuffle(exam.examQuestions, seedStr);
+        const shuffledEqs = pseudoRandomShuffle(exam.examQuestions || [], seedStr);
+        const validEqs = shuffledEqs.filter(eq => eq && eq.question);
         const questionLimit = exam.questionCount || 10;
-        const selectedEqs = shuffledEqs.slice(0, Math.min(questionLimit, shuffledEqs.length));
+        const selectedEqs = validEqs.slice(0, Math.min(questionLimit, validEqs.length));
 
         const questionsMapped = selectedEqs.map(eq => {
           const q = eq.question;
           let correctAnswer: string | string[] = '0';
+          const optionsList = q.options || [];
           if (q.type === 'mcq') {
-            const idx = q.options.findIndex(o => o.isCorrect);
+            const idx = optionsList.findIndex(o => o.isCorrect);
             correctAnswer = idx >= 0 ? String(idx) : '0';
           } else if (q.type === 'checkbox') {
-            correctAnswer = q.options
+            correctAnswer = optionsList
               .map((o, idx) => (o.isCorrect ? String(idx) : null))
               .filter((idx): idx is string => idx !== null);
           } else {
@@ -101,13 +103,13 @@ export const StudentController = {
 
           return {
             id: q.id,
-            subjectId: q.subjectId,
-            text: q.question,
-            type: q.type,
-            options: q.options.map(o => o.option),
+            subjectId: q.subjectId || '',
+            text: q.question || '',
+            type: q.type || 'mcq',
+            options: optionsList.map(o => o.option),
             correctAnswer,
             points: exam.marksPerQuestion || q.marks || 1,
-            difficulty: q.difficulty,
+            difficulty: q.difficulty || 'medium',
             createdAt: q.createdAt
           };
         });
@@ -127,25 +129,31 @@ export const StudentController = {
           }
         }
 
+        const subjectName = exam.subject
+          ? `${exam.subject.subjectName} (${exam.subject.id.substring(0, 5).toUpperCase()})`
+          : 'General Evaluation';
+        const createdBy = exam.faculty?.user?.id || '';
+        const createdByName = exam.faculty?.user?.name || 'Faculty Evaluator';
+
         return {
           id: exam.id,
           title: exam.title,
-          description: exam.description,
-          subjectId: exam.subjectId,
-          subjectName: `${exam.subject.subjectName} (${exam.subject.id.substring(0, 5).toUpperCase()})`,
+          description: exam.description || '',
+          subjectId: exam.subjectId || '',
+          subjectName,
           duration: exam.duration,
-          startTime: exam.startDate.toISOString(),
-          endTime: exam.endDate.toISOString(),
+          startTime: exam.startDate ? exam.startDate.toISOString() : new Date().toISOString(),
+          endTime: exam.endDate ? exam.endDate.toISOString() : new Date().toISOString(),
           questions: questionsMapped,
           questionCount: exam.questionCount || questionsMapped.length,
           negativeMarking: exam.negativeMarking,
           marksPerQuestion: exam.marksPerQuestion,
           negativeMarks: exam.negativeMarks,
           totalMarks: totalExamMarks,
-          createdBy: exam.faculty.user.id,
-          createdByName: exam.faculty.user.name,
+          createdBy,
+          createdByName,
           status: dynamicStatus,
-          createdAt: exam.startDate.toISOString(),
+          createdAt: exam.startDate ? exam.startDate.toISOString() : new Date().toISOString(),
           // Attempt details
           hasAttempted: !!resultObj,
           resultId: resultObj?.id || null,
@@ -162,6 +170,7 @@ export const StudentController = {
 
       return res.status(200).json(formatted);
     } catch (error) {
+      console.error('Error in StudentController.getExams:', error);
       next(error);
     }
   },
@@ -341,7 +350,7 @@ export const StudentController = {
         id: result.id,
         examId: exam.id,
         examTitle: exam.title,
-        subjectName: exam.subject.subjectName,
+        subjectName: exam.subject ? exam.subject.subjectName : 'General Evaluation',
         studentId: student.user.id,
         studentName: student.user.name,
         studentRollNo: student.registerNumber,
@@ -387,7 +396,7 @@ export const StudentController = {
           id: r.id,
           examId: r.examId,
           examTitle: r.exam.title,
-          subjectName: r.exam.subject.subjectName,
+          subjectName: r.exam.subject ? r.exam.subject.subjectName : 'General Evaluation',
           studentId: req.user!.id,
           studentName: req.user!.email, // simple fallback
           studentRollNo: student.registerNumber,
@@ -518,7 +527,7 @@ export const StudentController = {
         id: result.id,
         examId: result.examId,
         examTitle: result.exam.title,
-        subjectName: result.exam.subject.subjectName,
+        subjectName: result.exam.subject ? result.exam.subject.subjectName : 'General Evaluation',
         studentId: req.user!.id,
         studentName: req.user!.email,
         studentRollNo: student.registerNumber,

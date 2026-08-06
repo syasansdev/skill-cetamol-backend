@@ -420,7 +420,7 @@ export const FacultyController = {
         id: r.id,
         examId: r.examId,
         examTitle: r.exam.title,
-        subjectName: r.exam.subject.subjectName,
+        subjectName: r.exam.subject ? r.exam.subject.subjectName : 'General Evaluation',
         studentId: r.student.user.id,
         studentName: r.student.user.name,
         studentRollNo: r.student.registerNumber,
@@ -622,7 +622,7 @@ export const FacultyController = {
         registerNumber: se.student.registerNumber,
         examId: se.examId,
         examTitle: se.exam.title,
-        subjectName: se.exam.subject.subjectName,
+        subjectName: se.exam.subject ? se.exam.subject.subjectName : 'General Evaluation',
         submittedAt: se.submittedAt?.toISOString() || se.startedAt.toISOString(),
         pendingAnswerCount: se.studentAnswers.length,
         answers: se.studentAnswers.map(sa => ({
