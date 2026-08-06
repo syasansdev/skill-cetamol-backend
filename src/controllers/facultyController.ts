@@ -316,12 +316,29 @@ export const FacultyController = {
 
       const totalMarks = Math.round(parsedQuestionCount * parsedMarksPerQuestion);
 
+      let targetSubjectId = subjectId;
+      if (!targetSubjectId) {
+        let sub = await prisma.subject.findFirst();
+        if (!sub) {
+          let dept = await prisma.department.findFirst();
+          if (!dept) {
+            dept = await prisma.department.create({ data: { departmentName: 'General' } });
+          }
+          let course = await prisma.course.findFirst({ where: { departmentId: dept.id } });
+          if (!course) {
+            course = await prisma.course.create({ data: { courseName: 'General Evaluation Course', departmentId: dept.id } });
+          }
+          sub = await prisma.subject.create({ data: { subjectName: 'General Evaluation', courseId: course.id, semester: 1 } });
+        }
+        targetSubjectId = sub.id;
+      }
+
       // Create Exam
       const exam = await prisma.exam.create({
         data: {
           title,
           description: description || '',
-          subjectId,
+          subjectId: targetSubjectId,
           facultyId: faculty.id,
           duration: Number(duration),
           totalMarks,

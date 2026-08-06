@@ -16,11 +16,6 @@ export const StudentController = {
       }
 
       const allExams = await prisma.exam.findMany({
-        where: {
-          subject: {
-            courseId: student.courseId
-          }
-        },
         include: {
           subject: true,
           faculty: { include: { user: true } },
@@ -727,9 +722,7 @@ export const StudentController = {
         return res.status(403).json({ message: 'Student profile not found' });
       }
 
-      const subjects = await prisma.subject.findMany({
-        where: { courseId: student.courseId }
-      });
+      const subjects = await prisma.subject.findMany({});
 
       const formatted = subjects.map(s => ({
         id: s.id,
@@ -755,9 +748,6 @@ export const StudentController = {
       }
 
       const portions = await prisma.portion.findMany({
-        where: {
-          subject: { courseId: student.courseId }
-        },
         include: {
           subject: true
         },

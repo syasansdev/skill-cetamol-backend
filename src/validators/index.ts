@@ -30,7 +30,7 @@ export const createFacultySchema = z.object({
 });
 
 export const createQuestionSchema = z.object({
-  subjectId: z.string().min(1, 'Subject ID is required'),
+  subjectId: z.string().optional(),
   text: z.string().min(1, 'Question text content is required'), // Frontend uses text
   type: z.enum(['mcq', 'checkbox', 'text']),
   difficulty: z.enum(['easy', 'medium', 'hard']),
@@ -42,7 +42,7 @@ export const createQuestionSchema = z.object({
 export const createExamSchema = z.object({
   title: z.string().min(2, 'Exam title must be specified'),
   description: z.string().optional(),
-  subjectId: z.string().min(1, 'Subject assignment is required'),
+  subjectId: z.string().optional(),
   duration: z.number().min(5, 'Exam must be at least 5 minutes'),
   startTime: z.string().or(z.date()),
   endTime: z.string().or(z.date()),
