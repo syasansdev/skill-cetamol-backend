@@ -73,10 +73,12 @@ app.use(cors({
     'http://localhost:3000',
     'https://skill-bill-e990f.web.app',
     'https://skill-bill-e990f.firebaseapp.com',
+    'https://skillcetamol.online',
+    'https://www.skillcetamol.online',
     process.env.FRONTEND_URL
   ].filter(Boolean) as string[],
-  methods: ['GET', 'POST', 'PUT', 'DELETE'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
   credentials: true
 }));
 
