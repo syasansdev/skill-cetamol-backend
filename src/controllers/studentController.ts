@@ -83,8 +83,7 @@ export const StudentController = {
         const seedStr = `${student.id}-${exam.id}-${attemptSeed}`;
         const shuffledEqs = pseudoRandomShuffle(exam.examQuestions || [], seedStr);
         const validEqs = shuffledEqs.filter(eq => eq && eq.question);
-        const questionLimit = exam.questionCount || 10;
-        const selectedEqs = validEqs.slice(0, Math.min(questionLimit, validEqs.length));
+        const selectedEqs = validEqs;
 
         const questionsMapped = selectedEqs.map(eq => {
           const q = eq.question;
