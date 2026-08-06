@@ -19,6 +19,7 @@ router.post('/questions/import', FacultyController.importQuestions);
 
 router.get('/exams', FacultyController.getExams);
 router.post('/exams', validateBody(createExamSchema), FacultyController.createExam);
+router.get('/question-papers', FacultyController.getQuestionPapers);
 
 router.get('/results', FacultyController.getResults);
 router.get('/pending-students', FacultyController.getPendingStudents);

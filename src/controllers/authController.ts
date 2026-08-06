@@ -19,7 +19,7 @@ export const AuthController = {
   // 1. User/Student Register
   register: async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const { name, email: rawEmail, password, role, registerNumber, departmentId, courseId, yearOfPassing } = req.body;
+      const { name, email: rawEmail, password, role, registerNumber, departmentId, collegeId, courseId, yearOfPassing } = req.body;
       const email = rawEmail.toLowerCase();
 
       // Check if email already exists
@@ -48,14 +48,8 @@ export const AuthController = {
         if (!departmentId) {
           return res.status(400).json({ message: 'Department is required for students' });
         }
-        if (!courseId) {
-          return res.status(400).json({ message: 'Course is required for students' });
-        }
         if (!registerNumber || !registerNumber.trim()) {
           return res.status(400).json({ message: 'Registration number is required for students' });
-        }
-        if (!yearOfPassing) {
-          return res.status(400).json({ message: 'Year of passing is required for students' });
         }
 
         // Verify registration number uniqueness
@@ -66,15 +60,36 @@ export const AuthController = {
           return res.status(400).json({ message: 'Registration number is already registered' });
         }
 
-        // Verify department and course exist
-        const dept = await prisma.department.findUnique({ where: { id: departmentId } });
+        // Verify department exists
+        let dept = await prisma.department.findFirst({
+          where: {
+            OR: [
+              { id: departmentId },
+              { departmentName: { equals: departmentId } }
+            ]
+          }
+        });
         if (!dept) {
-          return res.status(404).json({ message: 'Selected department does not exist' });
+          dept = await prisma.department.create({
+            data: {
+              departmentName: departmentId,
+              collegeId: collegeId || null
+            }
+          });
         }
 
-        const crs = await prisma.course.findUnique({ where: { id: courseId } });
-        if (!crs) {
-          return res.status(404).json({ message: 'Selected course does not exist' });
+        let targetCourseId = courseId;
+        if (!targetCourseId) {
+          let crs = await prisma.course.findFirst({ where: { departmentId: dept.id } });
+          if (!crs) {
+            crs = await prisma.course.create({
+              data: {
+                courseName: `B.Tech - ${dept.departmentName}`,
+                departmentId: dept.id
+              }
+            });
+          }
+          targetCourseId = crs.id;
         }
 
         await prisma.student.create({
@@ -82,8 +97,9 @@ export const AuthController = {
             userId: user.id,
             registerNumber,
             departmentId: dept.id,
-            courseId: crs.id,
-            year: Number(yearOfPassing),
+            collegeId: collegeId || dept.collegeId || null,
+            courseId: targetCourseId,
+            year: Number(yearOfPassing || 1),
             phone: '',
             address: '',
             photoUrl: null
@@ -655,6 +671,27 @@ export const AuthController = {
         message: 'Profile updated successfully',
         user: responseUser
       });
+    } catch (error) {
+      next(error);
+    }
+  },
+
+  // 10. Public Academic Metadata for Dropdowns (Colleges & Departments)
+  getAcademicMetadata: async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const colleges = await prisma.college.findMany({
+        include: { departments: true },
+        orderBy: { collegeName: 'asc' }
+      });
+      const departments = await prisma.department.findMany({
+        include: { college: true },
+        orderBy: { departmentName: 'asc' }
+      });
+      const courses = await prisma.course.findMany({
+        orderBy: { courseName: 'asc' }
+      });
+
+      return res.status(200).json({ colleges, departments, courses });
     } catch (error) {
       next(error);
     }

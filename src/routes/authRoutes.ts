@@ -35,6 +35,7 @@ router.post('/reset-password', AuthController.resetPassword);
 router.get('/me', authenticateToken, AuthController.me);
 router.post('/magic-code', AuthController.requestMagicCode);
 router.post('/login-magic', AuthController.loginWithMagicCode);
+router.get('/academic-metadata', AuthController.getAcademicMetadata);
 
 router.post('/upload-photo', upload.single('photo'), (req, res) => {
   if (!req.file) {

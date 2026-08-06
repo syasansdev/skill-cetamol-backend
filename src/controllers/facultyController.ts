@@ -336,12 +336,16 @@ export const FacultyController = {
       }
 
       // Create Exam
+      const { paperName } = req.body;
       const exam = await prisma.exam.create({
         data: {
           title,
           description: description || '',
           subjectId: targetSubjectId,
           facultyId: faculty.id,
+          departmentId: faculty.departmentId,
+          collegeId: faculty.collegeId,
+          paperName: paperName || null,
           duration: Number(duration),
           totalMarks,
           startDate: new Date(startTime),
@@ -409,9 +413,20 @@ export const FacultyController = {
   // 6. Get Exam Results for Faculty grading view
   getResults: async (req: AuthRequest, res: Response, next: NextFunction) => {
     try {
+      let facultyDeptId: string | undefined = undefined;
+      if (req.user) {
+        const faculty = await prisma.faculty.findFirst({ where: { userId: req.user.id } });
+        if (faculty) {
+          facultyDeptId = faculty.departmentId;
+        }
+      }
+
       const results = await prisma.result.findMany({
+        where: facultyDeptId ? {
+          student: { departmentId: facultyDeptId }
+        } : {},
         include: {
-          student: { include: { user: true } },
+          student: { include: { user: true, department: true } },
           exam: {
             include: {
               subject: true,
@@ -1346,6 +1361,39 @@ export const FacultyController = {
         message: `Successfully generated ${createdQuestions.length} questions using AI for topic "${topic}".`,
         questions: createdQuestions
       });
+    } catch (error) {
+      next(error);
+    }
+  },
+
+  // 25. Get distinct Question Papers for Exam Scheduling Dropdown
+  getQuestionPapers: async (req: AuthRequest, res: Response, next: NextFunction) => {
+    try {
+      let facultyDeptId: string | undefined = undefined;
+      if (req.user) {
+        const faculty = await prisma.faculty.findFirst({ where: { userId: req.user.id } });
+        if (faculty) {
+          facultyDeptId = faculty.departmentId;
+        }
+      }
+
+      const questions = await prisma.question.findMany({
+        where: facultyDeptId ? { departmentId: facultyDeptId } : {},
+        select: { paperName: true },
+        distinct: ['paperName']
+      });
+
+      const docs = await prisma.uploadedDocument.findMany({
+        where: facultyDeptId ? { faculty: { departmentId: facultyDeptId } } : {},
+        select: { paperName: true, name: true },
+        distinct: ['paperName']
+      });
+
+      const papersSet = new Set<string>();
+      questions.forEach(q => { if (q.paperName) papersSet.add(q.paperName); });
+      docs.forEach(d => { if (d.paperName) papersSet.add(d.paperName); else if (d.name) papersSet.add(d.name); });
+
+      return res.status(200).json(Array.from(papersSet));
     } catch (error) {
       next(error);
     }

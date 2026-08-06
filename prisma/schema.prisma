@@ -25,17 +25,29 @@ model User {
   student          Student?
 }
 
+model College {
+  id          String       @id @default(uuid())
+  collegeName String       @unique
+  code        String?
+  createdAt   DateTime     @default(now())
+  departments Department[]
+  faculty     Faculty[]
+  students    Student[]
+}
+
 model Student {
   id             String        @id @default(uuid())
   userId         String        @unique
   registerNumber String        @unique
   departmentId   String
   courseId       String
+  collegeId      String?
   year           Int
   phone          String?
   address        String?
   photoUrl       String?
   results        Result[]
+  college        College?      @relation(fields: [collegeId], references: [id])
   course         Course        @relation(fields: [courseId], references: [id])
   department     Department    @relation(fields: [departmentId], references: [id])
   user           User          @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -47,9 +59,11 @@ model Faculty {
   id                String             @id @default(uuid())
   userId            String             @unique
   departmentId      String
+  collegeId         String?
   designation       String
   experience        Int
   exams             Exam[]
+  college           College?           @relation(fields: [collegeId], references: [id])
   department        Department         @relation(fields: [departmentId], references: [id])
   user              User               @relation(fields: [userId], references: [id], onDelete: Cascade)
   questions         Question[]
@@ -60,6 +74,8 @@ model Faculty {
 model Department {
   id             String    @id @default(uuid())
   departmentName String    @unique
+  collegeId      String?
+  college        College?  @relation(fields: [collegeId], references: [id], onDelete: Cascade)
   courses        Course[]
   faculty        Faculty[]
   students       Student[]
@@ -95,6 +111,8 @@ model Question {
   marks              Int
   facultyId          String
   subjectId          String
+  departmentId       String?
+  paperName          String?           @default("General Pool")
   uploadedDocumentId String?
   createdAt          DateTime          @default(now())
   examQuestions      ExamQuestion[]
@@ -114,25 +132,28 @@ model QuestionOption {
 }
 
 model Exam {
-  id            String         @id @default(uuid())
-  title         String
-  description   String
-  subjectId     String
-  facultyId     String
-  duration      Int
-  totalMarks    Int
-  startDate     DateTime
-  endDate       DateTime
-  status        String
-  questionCount   Int            @default(10)
-  negativeMarking Boolean        @default(false)
-  marksPerQuestion Float         @default(1.0)
-  negativeMarks   Float          @default(0.0)
-  faculty       Faculty        @relation(fields: [facultyId], references: [id])
-  subject       Subject        @relation(fields: [subjectId], references: [id])
-  examQuestions ExamQuestion[]
-  results       Result[]
-  studentExams  StudentExam[]
+  id               String         @id @default(uuid())
+  title            String
+  description      String
+  subjectId        String
+  facultyId        String
+  departmentId     String?
+  collegeId        String?
+  paperName        String?
+  duration         Int
+  totalMarks       Int
+  startDate        DateTime
+  endDate          DateTime
+  status           String
+  questionCount    Int            @default(10)
+  negativeMarking  Boolean        @default(false)
+  marksPerQuestion Float          @default(1.0)
+  negativeMarks    Float          @default(0.0)
+  faculty          Faculty        @relation(fields: [facultyId], references: [id])
+  subject          Subject        @relation(fields: [subjectId], references: [id])
+  examQuestions    ExamQuestion[]
+  results          Result[]
+  studentExams     StudentExam[]
 }
 
 model ExamQuestion {
@@ -239,7 +260,8 @@ model UploadedDocument {
   id        String     @id @default(uuid())
   name      String
   fileUrl   String
-  fileType  String     // 'pdf' | 'docx' | 'csv'
+  fileType  String     // 'pdf' | 'docx' | 'csv' | 'xlsx'
+  paperName String?    @default("General Question Paper")
   facultyId String
   subjectId String
   createdAt DateTime   @default(now())
@@ -248,4 +270,3 @@ model UploadedDocument {
   subject   Subject    @relation(fields: [subjectId], references: [id], onDelete: Cascade)
   questions Question[]
 }
-

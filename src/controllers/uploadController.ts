@@ -429,6 +429,7 @@ export const UploadController = {
           failedImports++;
         } else {
           // Insert Question
+          const paperName = req.body.paperName || 'Uploaded Question Set';
           const q = await prisma.question.create({
             data: {
               question: questionText,
@@ -436,7 +437,9 @@ export const UploadController = {
               difficulty,
               marks,
               facultyId: faculty.id,
-              subjectId
+              subjectId,
+              departmentId: faculty.departmentId,
+              paperName
             }
           });
 

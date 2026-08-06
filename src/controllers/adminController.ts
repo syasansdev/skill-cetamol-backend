@@ -216,7 +216,7 @@ export const AdminController = {
   // 4. Create Faculty / User profile
   createFaculty: async (req: AuthRequest, res: Response, next: NextFunction) => {
     try {
-      const { name, email: rawEmail, password, facultyId, departmentId, role, subjects } = req.body;
+      const { name, email: rawEmail, password, facultyId, departmentId, collegeId, role, subjects } = req.body;
       const email = rawEmail.toLowerCase();
  
       // Check if email already exists
@@ -245,7 +245,10 @@ export const AdminController = {
         });
         if (!dept) {
           dept = await prisma.department.create({
-            data: { departmentName: departmentId }
+            data: { 
+              departmentName: departmentId,
+              collegeId: collegeId || null
+            }
           });
         }
         resolvedDeptId = dept.id;
@@ -255,7 +258,10 @@ export const AdminController = {
         });
         if (!dept) {
           dept = await prisma.department.create({
-            data: { departmentName: 'General' }
+            data: { 
+              departmentName: 'General',
+              collegeId: collegeId || null
+            }
           });
         }
         resolvedDeptId = dept.id;
@@ -281,6 +287,7 @@ export const AdminController = {
           data: {
             userId: user.id,
             departmentId: resolvedDeptId,
+            collegeId: collegeId || null,
             designation: 'Lecturer',
             experience: 1
           }
@@ -372,8 +379,20 @@ export const AdminController = {
   // Departments
   getDepartments: async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const list = await prisma.department.findMany({ orderBy: { departmentName: 'asc' } });
-      const mapped = list.map(d => ({ id: d.id, name: d.departmentName, code: d.departmentName.split(' ').map(x => x[0]).join('').toUpperCase() }));
+      const list = await prisma.department.findMany({
+        include: { college: true, _count: { select: { faculty: true, students: true } } },
+        orderBy: { departmentName: 'asc' }
+      });
+      const mapped = list.map(d => ({
+        id: d.id,
+        name: d.departmentName,
+        departmentName: d.departmentName,
+        code: d.departmentName.split(' ').map(x => x[0]).join('').toUpperCase(),
+        collegeId: d.collegeId,
+        collegeName: d.college?.collegeName || 'N/A',
+        facultyCount: d._count.faculty,
+        studentCount: d._count.students
+      }));
       return res.status(200).json(mapped);
     } catch (error) {
       next(error);
@@ -382,14 +401,24 @@ export const AdminController = {
 
   createDepartment: async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const { name } = req.body; // frontend sends { name }
+      const { name, departmentName, collegeId } = req.body;
+      const dName = (departmentName || name || '').trim();
+      if (!dName) return res.status(400).json({ message: 'Department name is required' });
+
       const dept = await prisma.department.create({
-        data: { departmentName: name }
+        data: {
+          departmentName: dName,
+          collegeId: collegeId || null
+        },
+        include: { college: true }
       });
       return res.status(201).json({
         id: dept.id,
         name: dept.departmentName,
-        code: dept.departmentName.split(' ').map(x => x[0]).join('').toUpperCase()
+        departmentName: dept.departmentName,
+        code: dept.departmentName.split(' ').map(x => x[0]).join('').toUpperCase(),
+        collegeId: dept.collegeId,
+        collegeName: dept.college?.collegeName || 'N/A'
       });
     } catch (error) {
       next(error);
@@ -1058,6 +1087,89 @@ export const AdminController = {
       await prisma.questionOption.deleteMany({ where: { questionId: id } });
       await prisma.question.delete({ where: { id } });
       return res.status(200).json({ message: 'Question deleted successfully' });
+    } catch (error) {
+      next(error);
+    }
+  },
+
+  // 30. College Management
+  getColleges: async (req: AuthRequest, res: Response, next: NextFunction) => {
+    try {
+      const colleges = await prisma.college.findMany({
+        include: { departments: true, _count: { select: { faculty: true, students: true } } },
+        orderBy: { collegeName: 'asc' }
+      });
+      return res.status(200).json(colleges);
+    } catch (error) {
+      next(error);
+    }
+  },
+
+  createCollege: async (req: AuthRequest, res: Response, next: NextFunction) => {
+    try {
+      const { collegeName, code } = req.body;
+      if (!collegeName || !collegeName.trim()) {
+        return res.status(400).json({ message: 'College name is required' });
+      }
+
+      const college = await prisma.college.create({
+        data: { collegeName: collegeName.trim(), code: code?.trim() || null }
+      });
+      return res.status(201).json(college);
+    } catch (error) {
+      next(error);
+    }
+  },
+
+  deleteCollege: async (req: AuthRequest, res: Response, next: NextFunction) => {
+    try {
+      const { id } = req.params;
+      await prisma.college.delete({ where: { id } });
+      return res.status(200).json({ message: 'College deleted successfully' });
+    } catch (error) {
+      next(error);
+    }
+  },
+
+  deleteDepartment: async (req: AuthRequest, res: Response, next: NextFunction) => {
+    try {
+      const { id } = req.params;
+      await prisma.department.delete({ where: { id } });
+      return res.status(200).json({ message: 'Department deleted successfully' });
+    } catch (error) {
+      next(error);
+    }
+  },
+
+  // 32. Fresh System Reset (Clear Students, Faculty, Exams, Questions, Results)
+  resetDatabase: async (req: AuthRequest, res: Response, next: NextFunction) => {
+    try {
+      // Delete transactional & user evaluation records
+      await prisma.studentAnswer.deleteMany({});
+      await prisma.studentExam.deleteMany({});
+      await prisma.result.deleteMany({});
+      await prisma.examQuestion.deleteMany({});
+      await prisma.exam.deleteMany({});
+      await prisma.questionOption.deleteMany({});
+      await prisma.question.deleteMany({});
+      await prisma.uploadedDocument.deleteMany({});
+      await prisma.note.deleteMany({});
+      await prisma.portion.deleteMany({});
+      
+      // Delete Non-Admin Users, Students, and Faculty
+      const nonAdminUsers = await prisma.user.findMany({
+        where: { role: { in: ['student', 'faculty'] } }
+      });
+
+      for (const u of nonAdminUsers) {
+        await prisma.student.deleteMany({ where: { userId: u.id } });
+        await prisma.faculty.deleteMany({ where: { userId: u.id } });
+        await prisma.user.delete({ where: { id: u.id } });
+      }
+
+      return res.status(200).json({ 
+        message: 'System database successfully reset. All student and faculty records have been cleared.' 
+      });
     } catch (error) {
       next(error);
     }

@@ -13,9 +13,15 @@ router.use(authenticateToken);
 router.get('/subjects', requireRole(['admin', 'faculty']), AdminController.getSubjects);
 router.post('/subjects', requireRole(['admin', 'faculty']), AdminController.createSubject);
 
-// Department operations (accessible by admin and faculty)
+// College operations (accessible by admin and faculty)
+router.get('/colleges', requireRole(['admin', 'faculty']), AdminController.getColleges);
+router.post('/colleges', requireRole(['admin']), AdminController.createCollege);
+router.delete('/colleges/:id', requireRole(['admin']), AdminController.deleteCollege);
+
+// Department operations
 router.get('/departments', requireRole(['admin', 'faculty']), AdminController.getDepartments);
 router.post('/departments', requireRole(['admin', 'faculty']), AdminController.createDepartment);
+router.delete('/departments/:id', requireRole(['admin']), AdminController.deleteDepartment);
 
 // Course operations (accessible by admin and faculty)
 router.get('/courses', requireRole(['admin', 'faculty']), AdminController.getCourses);
@@ -27,6 +33,7 @@ router.get('/users', AdminController.getUsers);
 router.post('/users/:id/approve', AdminController.approveStudent);
 router.delete('/users/:id', AdminController.deleteUser);
 router.post('/faculty', validateBody(createFacultySchema), AdminController.createFaculty);
+router.post('/reset-database', AdminController.resetDatabase);
 
 // Subject operations
 
