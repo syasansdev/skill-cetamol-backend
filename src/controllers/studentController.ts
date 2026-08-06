@@ -243,6 +243,7 @@ export const StudentController = {
       const answerInserts = [];
 
       for (const eq of exam.examQuestions) {
+        if (!eq || !eq.question) continue;
         const q = eq.question;
         const studentAns = answers[q.id];
 
@@ -481,8 +482,10 @@ export const StudentController = {
         });
       }
 
-      const detailedQuestions = result.exam.examQuestions.map(eq => {
-        const q = eq.question;
+      const detailedQuestions = result.exam.examQuestions
+        .filter(eq => eq && eq.question)
+        .map(eq => {
+          const q = eq.question;
         const studentAns = studentExam?.studentAnswers.find(sa => sa.questionId === q.id);
 
         let studentOption: string | string[] | null = null;

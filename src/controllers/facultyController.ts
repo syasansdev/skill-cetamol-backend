@@ -223,8 +223,10 @@ export const FacultyController = {
 
       // Map to frontend expectation
       const formatted = exams.map(e => {
-        const questionsMapped = e.examQuestions.map(eq => {
-          const q = eq.question;
+        const questionsMapped = e.examQuestions
+          .filter(eq => eq && eq.question)
+          .map(eq => {
+            const q = eq.question;
           let correctAnswer: string | string[] = '0';
           if (q.type === 'mcq') {
             const idx = q.options.findIndex(o => o.isCorrect);
@@ -585,7 +587,7 @@ export const FacultyController = {
       });
 
       const examIdsWithText = exams
-        .filter(e => e.examQuestions.some(eq => eq.question.type === 'text'))
+        .filter(e => e.examQuestions.some(eq => eq && eq.question && eq.question.type === 'text'))
         .map(e => e.id);
 
       // Get submitted student exams for those exams that have ungraded text answers
@@ -628,8 +630,8 @@ export const FacultyController = {
         answers: se.studentAnswers.map(sa => ({
           answerId: sa.id,
           questionId: sa.questionId,
-          questionText: sa.question.question,
-          maxMarks: sa.question.marks,
+          questionText: sa.question ? sa.question.question : '',
+          maxMarks: sa.question ? sa.question.marks : 1,
           answerText: sa.answerText || '',
           marksAwarded: sa.marksAwarded
         }))
