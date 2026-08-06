@@ -88,7 +88,7 @@ export const StudentController = {
         const questionsMapped = selectedEqs.map(eq => {
           const q = eq.question;
           let correctAnswer: string | string[] = '0';
-          const optionsList = q.options || [];
+          const optionsList = [...(q.options || [])].sort((a, b) => a.id.localeCompare(b.id));
           if (q.type === 'mcq') {
             const idx = optionsList.findIndex(o => o.isCorrect);
             correctAnswer = idx >= 0 ? String(idx) : '0';
@@ -255,15 +255,23 @@ export const StudentController = {
         if (studentAns === undefined || studentAns === '' || (Array.isArray(studentAns) && studentAns.length === 0)) {
           skippedCount++;
         } else {
+          const sortedOptions = [...(q.options || [])].sort((a, b) => a.id.localeCompare(b.id));
+
           if (q.type === 'mcq') {
             selectedOption = String(studentAns);
-            const correctOptIdx = q.options.findIndex(o => o.isCorrect);
-            isCorrect = String(correctOptIdx) === String(studentAns);
+            const selectedOptIdx = Number(studentAns);
+            if (!isNaN(selectedOptIdx) && selectedOptIdx >= 0 && selectedOptIdx < sortedOptions.length) {
+              const selectedOptionObj = sortedOptions[selectedOptIdx];
+              isCorrect = Boolean(selectedOptionObj && selectedOptionObj.isCorrect);
+            } else {
+              const matchedOptionObj = sortedOptions.find(o => o.option.trim().toLowerCase() === String(studentAns).trim().toLowerCase());
+              isCorrect = Boolean(matchedOptionObj && matchedOptionObj.isCorrect);
+            }
           } else if (q.type === 'checkbox') {
             const studentIndices = Array.isArray(studentAns) ? studentAns.map(String).sort() : [String(studentAns)];
             selectedOption = studentIndices.join(',');
 
-            const correctIndices = q.options
+            const correctIndices = sortedOptions
               .map((o, idx) => (o.isCorrect ? String(idx) : null))
               .filter((x): x is string => x !== null)
               .sort();
@@ -309,8 +317,12 @@ export const StudentController = {
         data: { score: finalScore, submittedAt: new Date() }
       });
 
-      // Calculate percentage and status
-      const totalPoints = exam.totalMarks || 10;
+      // Calculate total exam points accurately based on evaluated questions
+      const evaluatedQuestionCount = exam.examQuestions.filter(eq => eq && eq.question).length;
+      const totalPoints = evaluatedQuestionCount > 0
+        ? Math.round(evaluatedQuestionCount * marksPerQ)
+        : (exam.totalMarks || 10);
+
       const percentage = Math.max(0, Math.round((finalScore / totalPoints) * 100));
       const status = percentage >= 40 ? 'pass' : 'fail';
 
@@ -486,44 +498,50 @@ export const StudentController = {
         .filter(eq => eq && eq.question)
         .map(eq => {
           const q = eq.question;
-        const studentAns = studentExam?.studentAnswers.find(sa => sa.questionId === q.id);
+          const studentAns = studentExam?.studentAnswers.find(sa => sa.questionId === q.id);
 
-        let studentOption: string | string[] | null = null;
-        if (studentAns) {
-          if (studentAns.selectedOption !== null) {
-            const parts = studentAns.selectedOption.split(',');
-            studentOption = parts.length > 1 ? parts : parts[0];
-          } else if (studentAns.answerText !== null) {
-            studentOption = studentAns.answerText;
+          let studentOption: string | string[] | null = null;
+          if (studentAns) {
+            if (studentAns.selectedOption !== null) {
+              const parts = studentAns.selectedOption.split(',');
+              studentOption = parts.length > 1 ? parts : parts[0];
+            } else if (studentAns.answerText !== null) {
+              studentOption = studentAns.answerText;
+            }
           }
-        }
 
-        let correctAnswer: string | string[] = '0';
-        if (q.type === 'mcq') {
-          const idx = q.options.findIndex(o => o.isCorrect);
-          correctAnswer = idx >= 0 ? String(idx) : '0';
-        } else if (q.type === 'checkbox') {
-          correctAnswer = q.options
-            .map((o, idx) => (o.isCorrect ? String(idx) : null))
-            .filter((idx): idx is string => idx !== null);
-        } else {
-          correctAnswer = '';
-        }
+          const sortedOptions = [...(q.options || [])].sort((a, b) => a.id.localeCompare(b.id));
 
-        const isCorrect = studentAns ? studentAns.marksAwarded > 0 : false;
+          let correctAnswer: string | string[] = '0';
+          if (q.type === 'mcq') {
+            const idx = sortedOptions.findIndex(o => o.isCorrect);
+            correctAnswer = idx >= 0 ? String(idx) : '0';
+          } else if (q.type === 'checkbox') {
+            correctAnswer = sortedOptions
+              .map((o, idx) => (o.isCorrect ? String(idx) : null))
+              .filter((idx): idx is string => idx !== null);
+          } else {
+            correctAnswer = '';
+          }
 
-        return {
-          id: q.id,
-          text: q.question,
-          type: q.type,
-          options: q.options.map(o => o.option),
-          correctAnswer,
-          studentOption,
-          isCorrect,
-          marksAwarded: studentAns ? studentAns.marksAwarded : 0,
-          difficulty: q.difficulty
-        };
-      });
+          const isCorrect = studentAns ? studentAns.marksAwarded > 0 : false;
+
+          return {
+            id: q.id,
+            text: q.question,
+            type: q.type,
+            options: sortedOptions.map(o => o.option),
+            correctAnswer,
+            studentOption,
+            isCorrect,
+            marksAwarded: studentAns ? studentAns.marksAwarded : 0,
+            difficulty: q.difficulty
+          };
+        });
+
+      const actualTotalPoints = detailedQuestions.length > 0
+        ? Math.round(detailedQuestions.length * (result.exam.marksPerQuestion || 1))
+        : (result.exam.totalMarks || 10);
 
       return res.status(200).json({
         id: result.id,
@@ -533,8 +551,8 @@ export const StudentController = {
         studentId: req.user!.id,
         studentName: req.user!.email,
         studentRollNo: student.registerNumber,
-        score: Math.round((result.percentage / 100) * result.exam.totalMarks),
-        totalPoints: result.exam.totalMarks,
+        score: Math.round((result.percentage / 100) * actualTotalPoints),
+        totalPoints: actualTotalPoints,
         percentage: result.percentage,
         status: result.status,
         answers: answersMapped,
