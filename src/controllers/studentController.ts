@@ -397,30 +397,64 @@ export const StudentController = {
       const results = await prisma.result.findMany({
         where: { studentId: student.id },
         include: {
-          exam: { include: { subject: true } }
+          exam: {
+            include: {
+              subject: true,
+              examQuestions: { include: { question: true } }
+            }
+          }
         },
-        orderBy: { examId: 'desc' }
+        orderBy: { id: 'desc' }
+      });
+
+      const studentExams = await prisma.studentExam.findMany({
+        where: {
+          studentId: student.id,
+          examId: { in: results.map((r: any) => r.examId) }
+        }
+      });
+
+      const seMap = new Map<string, any>();
+      studentExams.forEach((se: any) => {
+        seMap.set(se.examId, se);
       });
 
       // Map to frontend response format
-      const formatted = results.map(r => {
+      const formatted = results.map((r: any) => {
+        const se = seMap.get(r.examId);
+        const totalEqs = (r.exam?.examQuestions || []).filter((eq: any) => eq && eq.question).length;
+        const actualTotalPoints = totalEqs > 0
+          ? Math.round(totalEqs * (r.exam?.marksPerQuestion || 1))
+          : (r.exam?.totalMarks || 10);
+
+        let rawScore = Math.round((r.percentage / 100) * actualTotalPoints);
+        if (se && typeof se.score === 'number' && se.score > 0) {
+          rawScore = Math.round(se.score);
+        }
+
+        let timeTakenSeconds = 0;
+        if (se && se.submittedAt && se.startedAt) {
+          timeTakenSeconds = Math.max(1, Math.round((new Date(se.submittedAt).getTime() - new Date(se.startedAt).getTime()) / 1000));
+        }
+
+        const submissionDate = (se && se.submittedAt)
+          ? se.submittedAt.toISOString()
+          : (r.exam?.endDate ? r.exam.endDate.toISOString() : new Date().toISOString());
+
         return {
           id: r.id,
           examId: r.examId,
-          examTitle: r.exam.title,
-          subjectName: r.exam.subject ? r.exam.subject.subjectName : 'General Evaluation',
+          examTitle: r.exam?.title || 'Examination',
+          subjectName: r.exam?.subject ? r.exam.subject.subjectName : 'General Evaluation',
           studentId: req.user!.id,
-          studentName: req.user!.email, // simple fallback
+          studentName: req.user!.email,
           studentRollNo: student.registerNumber,
-          score: Math.round((r.percentage / 100) * r.exam.totalMarks),
-          totalPoints: r.exam.totalMarks,
+          score: rawScore,
+          totalPoints: actualTotalPoints,
           percentage: r.percentage,
           status: r.status,
-          timeTaken: 1200, // mock duration details
-          correctCount: 2,
-          wrongCount: 0,
-          skippedCount: 0,
-          submittedAt: r.exam.endDate.toISOString(),
+          timeTaken: timeTakenSeconds,
+          submittedAt: submissionDate,
           rank: r.rank || 1
         };
       });
