@@ -412,27 +412,66 @@ export const FacultyController = {
       const results = await prisma.result.findMany({
         include: {
           student: { include: { user: true } },
-          exam: { include: { subject: true } }
+          exam: {
+            include: {
+              subject: true,
+              examQuestions: { include: { question: true } }
+            }
+          }
         },
-        orderBy: { examId: 'desc' }
+        orderBy: { id: 'desc' }
+      });
+
+      const studentExams = await prisma.studentExam.findMany({
+        where: {
+          examId: { in: results.map((r: any) => r.examId) },
+          studentId: { in: results.map((r: any) => r.studentId) }
+        }
+      });
+
+      const seMap = new Map<string, any>();
+      studentExams.forEach((se: any) => {
+        seMap.set(`${se.studentId}_${se.examId}`, se);
       });
 
       // Mapped response matching frontend
-      const mapped = results.map(r => ({
-        id: r.id,
-        examId: r.examId,
-        examTitle: r.exam.title,
-        subjectName: r.exam.subject ? r.exam.subject.subjectName : 'General Evaluation',
-        studentId: r.student.user.id,
-        studentName: r.student.user.name,
-        studentRollNo: r.student.registerNumber,
-        score: Math.round((r.percentage / 100) * r.exam.totalMarks), // calculate raw score
-        totalPoints: r.exam.totalMarks,
-        percentage: r.percentage,
-        status: r.status,
-        timeTaken: 1800, // mock time taken (30 mins)
-        submittedAt: r.exam.endDate.toISOString()
-      }));
+      const mapped = results.map((r: any) => {
+        const se = seMap.get(`${r.studentId}_${r.examId}`);
+        const totalEqs = (r.exam?.examQuestions || []).filter((eq: any) => eq && eq.question).length;
+        const totalPoints = totalEqs > 0
+          ? Math.round(totalEqs * (r.exam?.marksPerQuestion || 1))
+          : (r.exam?.totalMarks || 10);
+
+        let rawScore = Math.round((r.percentage / 100) * totalPoints);
+        if (se && typeof se.score === 'number' && se.score > 0) {
+          rawScore = Math.round(se.score);
+        }
+
+        let timeTakenSeconds = 0;
+        if (se && se.submittedAt && se.startedAt) {
+          timeTakenSeconds = Math.max(1, Math.round((new Date(se.submittedAt).getTime() - new Date(se.startedAt).getTime()) / 1000));
+        }
+
+        const submissionDate = (se && se.submittedAt)
+          ? se.submittedAt.toISOString()
+          : (r.exam?.endDate ? r.exam.endDate.toISOString() : new Date().toISOString());
+
+        return {
+          id: r.id,
+          examId: r.examId,
+          examTitle: r.exam?.title || 'Examination',
+          subjectName: r.exam?.subject ? r.exam.subject.subjectName : 'General Evaluation',
+          studentId: r.student?.user?.id || '',
+          studentName: r.student?.user?.name || 'Student',
+          studentRollNo: r.student?.registerNumber || '',
+          score: rawScore,
+          totalPoints,
+          percentage: r.percentage,
+          status: r.status,
+          timeTaken: timeTakenSeconds,
+          submittedAt: submissionDate
+        };
+      });
 
       return res.status(200).json(mapped);
     } catch (error) {
