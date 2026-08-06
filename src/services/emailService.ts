@@ -1,6 +1,6 @@
 import transporter from '../config/mail';
 
-const EMAIL_FROM = '"Skill Cetamol Portal" <syasanscareeranalytics@gmail.com>';
+const getSender = () => `"Skill Cetamol Portal" <${process.env.EMAIL_USER || 'syasanscareeranalytics@gmail.com'}>`;
 
 export const emailService = {
   // 1. Student Registration
@@ -18,7 +18,7 @@ export const emailService = {
       </div>
     `;
     return transporter.sendMail({
-      from: EMAIL_FROM,
+      from: getSender(),
       to: email,
       subject: 'Skill Cetamol Exam Portal - Registration Successful',
       html
@@ -40,7 +40,7 @@ export const emailService = {
       </div>
     `;
     return transporter.sendMail({
-      from: EMAIL_FROM,
+      from: getSender(),
       to: email,
       subject: 'Skill Cetamol Exam Portal - Student Account Approved',
       html
@@ -51,6 +51,7 @@ export const emailService = {
   sendFacultyAccountCreated: async (email: string, name: string, facultyId: string, password?: string, role: string = 'faculty') => {
     const roleLabel = role.charAt(0).toUpperCase() + role.slice(1);
     const displayPassword = password || 'faculty123';
+    console.log(`[EmailService] Attempting to send ${roleLabel} welcome email to ${email}...`);
     const html = `
 <!DOCTYPE html>
 <html lang="en">
@@ -158,12 +159,19 @@ export const emailService = {
 </body>
 </html>
     `;
-    return transporter.sendMail({
-      from: EMAIL_FROM,
-      to: email,
-      subject: `✅ Skill Cetamol Portal — Your ${roleLabel} Account is Ready`,
-      html
-    });
+    try {
+      const info = await transporter.sendMail({
+        from: getSender(),
+        to: email,
+        subject: `✅ Skill Cetamol Portal — Your ${roleLabel} Account is Ready`,
+        html
+      });
+      console.log(`[EmailService] Faculty welcome email sent successfully to ${email}. Message ID: ${info.messageId}`);
+      return info;
+    } catch (err) {
+      console.error(`[EmailService] Failed to send welcome email to ${email}:`, err);
+      throw err;
+    }
   },
 
   // 4. Exam Scheduled
@@ -182,7 +190,7 @@ export const emailService = {
       </div>
     `;
     return transporter.sendMail({
-      from: EMAIL_FROM,
+      from: getSender(),
       to: email,
       subject: `Exam Notice: ${examTitle}`,
       html
@@ -201,7 +209,7 @@ export const emailService = {
       </div>
     `;
     return transporter.sendMail({
-      from: EMAIL_FROM,
+      from: getSender(),
       to: email,
       subject: `Proctor Alert: ${examTitle} starting in ${minutesLeft} mins`,
       html
@@ -223,7 +231,7 @@ export const emailService = {
       </div>
     `;
     return transporter.sendMail({
-      from: EMAIL_FROM,
+      from: getSender(),
       to: email,
       subject: 'Skill Cetamol Exam Portal - Password Reset Link',
       html
@@ -249,7 +257,7 @@ export const emailService = {
       </div>
     `;
     return transporter.sendMail({
-      from: EMAIL_FROM,
+      from: getSender(),
       to: email,
       subject: `Evaluation Scorecard Released: ${examTitle}`,
       html
@@ -271,7 +279,7 @@ export const emailService = {
       </div>
     `;
     return transporter.sendMail({
-      from: EMAIL_FROM,
+      from: getSender(),
       to: email,
       subject: 'Skill Cetamol Exam Portal - Login Magic Code',
       html
@@ -293,7 +301,7 @@ export const emailService = {
       </div>
     `;
     return transporter.sendMail({
-      from: EMAIL_FROM,
+      from: getSender(),
       to: email,
       subject: 'Skill Cetamol Exam Portal - Password Reset Code',
       html

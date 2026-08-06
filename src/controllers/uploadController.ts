@@ -2,6 +2,7 @@ import { Response, NextFunction } from 'express';
 import bcrypt from 'bcrypt';
 import prisma from '../config/db';
 import { AuthRequest } from '../middleware/auth';
+import { emailService } from '../services/emailService';
 
 // Helper to parse CSV buffer safely, handling double-quotes
 const parseCSV = (csvText: string): string[][] => {
@@ -289,7 +290,7 @@ export const UploadController = {
             }
           });
 
-          await prisma.faculty.create({
+          const faculty = await prisma.faculty.create({
             data: {
               userId: user.id,
               departmentId: deptId,
@@ -297,6 +298,13 @@ export const UploadController = {
               experience: expYears || 1
             }
           });
+
+          // Send welcome email to faculty
+          try {
+            await emailService.sendFacultyAccountCreated(email, name, faculty.id, password, 'faculty');
+          } catch (mailErr) {
+            console.error(`[UploadController] Failed sending welcome email to ${email}:`, mailErr);
+          }
 
           successfulImports++;
         }
