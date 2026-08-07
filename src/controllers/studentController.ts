@@ -94,9 +94,8 @@ export const StudentController = {
           });
         }
 
-        // Randomize questions for this student attempt
-        const attemptSeed = attempt ? new Date(attempt.startedAt).getTime() : Date.now();
-        const seedStr = `${student.id}-${exam.id}-${attemptSeed}`;
+        // Randomize questions for this student attempt (stable per student + exam)
+        const seedStr = `${student.id}-${exam.id}`;
         const shuffledEqs = pseudoRandomShuffle(exam.examQuestions || [], seedStr);
         const validEqs = shuffledEqs.filter(eq => eq && eq.question);
         const selectedEqs = validEqs;
