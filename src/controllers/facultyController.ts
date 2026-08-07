@@ -1396,29 +1396,35 @@ export const FacultyController = {
   // 25. Get distinct Question Papers for Exam Scheduling Dropdown
   getQuestionPapers: async (req: AuthRequest, res: Response, next: NextFunction) => {
     try {
+      let facultyId: string | undefined = undefined;
       let facultyDeptId: string | undefined = undefined;
       if (req.user) {
         const faculty = await prisma.faculty.findFirst({ where: { userId: req.user.id } });
         if (faculty) {
+          facultyId = faculty.id;
           facultyDeptId = faculty.departmentId;
         }
       }
 
       const questions = await prisma.question.findMany({
-        where: facultyDeptId ? { departmentId: facultyDeptId } : {},
-        select: { paperName: true },
-        distinct: ['paperName']
+        where: facultyId ? { OR: [{ facultyId }, { departmentId: facultyDeptId }] } : {},
+        select: { paperName: true, uploadedDocument: { select: { name: true } } }
       });
 
       const docs = await prisma.uploadedDocument.findMany({
-        where: facultyDeptId ? { faculty: { departmentId: facultyDeptId } } : {},
-        select: { paperName: true, name: true },
-        distinct: ['paperName']
+        where: facultyId ? { OR: [{ facultyId }, { faculty: { departmentId: facultyDeptId } }] } : {},
+        select: { paperName: true, name: true }
       });
 
       const papersSet = new Set<string>();
-      questions.forEach(q => { if (q.paperName) papersSet.add(q.paperName); });
-      docs.forEach(d => { if (d.paperName) papersSet.add(d.paperName); else if (d.name) papersSet.add(d.name); });
+      questions.forEach(q => {
+        if (q.paperName) papersSet.add(q.paperName);
+        if (q.uploadedDocument?.name) papersSet.add(q.uploadedDocument.name);
+      });
+      docs.forEach(d => {
+        if (d.paperName) papersSet.add(d.paperName);
+        if (d.name) papersSet.add(d.name);
+      });
 
       return res.status(200).json(Array.from(papersSet));
     } catch (error) {
