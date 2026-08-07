@@ -25,6 +25,7 @@ export const createFacultySchema = z.object({
   password: z.string().min(6, 'Password must be at least 6 characters'),
   facultyId: z.string().optional(),
   departmentId: z.string().min(1, 'Department assignment is required'),
+  collegeId: z.string().optional(),
   role: z.string().optional(),
   subjects: z.array(z.string()).optional()
 });
