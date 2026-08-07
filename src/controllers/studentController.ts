@@ -17,9 +17,19 @@ export const StudentController = {
 
       const allExams = await prisma.exam.findMany({
         where: {
-          OR: [
-            { departmentId: student.departmentId },
-            { departmentId: null }
+          AND: [
+            {
+              OR: [
+                { departmentId: student.departmentId },
+                { departmentId: null }
+              ]
+            },
+            {
+              OR: [
+                { collegeId: student.collegeId },
+                { collegeId: null }
+              ]
+            }
           ]
         },
         include: {
