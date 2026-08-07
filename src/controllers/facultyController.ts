@@ -265,12 +265,21 @@ export const FacultyController = {
           }
         }
 
+        let displaySubjectName = `${e.subject.subjectName} (${e.subject.id.substring(0,5).toUpperCase()})`;
+        if (
+          e.title.includes('EEC Course Examination') ||
+          e.paperName === 'EEC Course Examination' ||
+          e.examQuestions.some((eq: any) => eq.question?.paperName === 'EEC Course Examination')
+        ) {
+          displaySubjectName = `AML Examination EEC Course (${e.subjectId.substring(0,5).toUpperCase()})`;
+        }
+
         return {
           id: e.id,
           title: e.title,
           description: e.description,
           subjectId: e.subjectId,
-          subjectName: `${e.subject.subjectName} (${e.subject.id.substring(0,5).toUpperCase()})`,
+          subjectName: displaySubjectName,
           duration: e.duration,
           startTime: e.startDate.toISOString(), // map startDate -> startTime
           endTime: e.endDate.toISOString(), // map endDate -> endTime
