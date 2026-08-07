@@ -21,7 +21,10 @@ export const StudentController = {
             {
               OR: [
                 { departmentId: student.departmentId },
-                { departmentId: null }
+                { departmentId: null },
+                { title: { contains: 'EEC' } },
+                { title: { contains: 'Course Examination' } },
+                { paperName: { contains: 'EEC' } }
               ]
             },
             {

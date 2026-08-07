@@ -279,13 +279,19 @@ const questionsData = [
 export async function seedAdlinData() {
   console.log('Seeding Adlin Sheeba faculty, subject, and 50 questions dataset...');
 
-  // 1. Ensure Department exists
+  // 1. Ensure Department "Artificial Intelligence & Machine Learning (AML)" exists
   let dept = await prisma.department.findFirst({
-    where: { OR: [{ departmentName: 'Computer Science & Engineering' }, { departmentName: 'Information Technology' }] }
+    where: {
+      OR: [
+        { departmentName: { contains: 'AML' } },
+        { departmentName: { contains: 'Machine Learning' } },
+        { departmentName: 'Artificial Intelligence & Machine Learning' }
+      ]
+    }
   });
   if (!dept) {
     dept = await prisma.department.create({
-      data: { departmentName: 'Computer Science & Engineering' }
+      data: { departmentName: 'Artificial Intelligence & Machine Learning (AML)' }
     });
   }
 
@@ -296,7 +302,7 @@ export async function seedAdlinData() {
   if (!course) {
     course = await prisma.course.create({
       data: {
-        courseName: 'B.Tech Computer Science & Engineering',
+        courseName: 'B.Tech Artificial Intelligence & Machine Learning',
         departmentId: dept.id
       }
     });
@@ -425,19 +431,26 @@ export async function seedAdlinData() {
     console.log(`✅ Successfully seeded 50 questions with 100% correct answer keys for Faculty Adlin Sheeba under subject "${subject.subjectName}" and document "${docName}"!`);
   }
 
-  // 7. Update any existing exams with title "EEC Course Examination" to link to AML Examination EEC Course subject.id
+  // 7. Update any existing exams with title "EEC Course Examination" to link to AML Examination EEC Course subject.id & AML departmentId
+  await prisma.faculty.update({
+    where: { id: faculty.id },
+    data: { departmentId: dept.id }
+  });
+
   await prisma.exam.updateMany({
     where: {
       OR: [
-        { title: { contains: 'EEC Course Examination' } },
+        { title: { contains: 'EEC' } },
+        { title: { contains: 'Course Examination' } },
         { paperName: 'EEC Course Examination' }
       ]
     },
     data: {
-      subjectId: subject.id
+      subjectId: subject.id,
+      departmentId: dept.id
     }
   });
-  console.log(`Updated all "EEC Course Examination" exams to point to subject "${subject.subjectName}"`);
+  console.log(`Updated all "EEC Course Examination" exams to point to subject "${subject.subjectName}" and department "${dept.departmentName}"`);
 }
 
 if (require.main === module) {
