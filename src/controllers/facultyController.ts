@@ -223,6 +223,26 @@ export const FacultyController = {
       });
 
       // Map to frontend expectation
+      // Auto-correct any EEC exam subjectId in database if mismatched
+      for (const e of exams) {
+        if (
+          (e.title.includes('EEC') || e.paperName?.includes('EEC') || e.title.includes('Course Examination')) &&
+          !e.subject.subjectName.includes('AML')
+        ) {
+          const amlSub = await prisma.subject.findFirst({
+            where: { subjectName: { contains: 'AML' } }
+          });
+          if (amlSub) {
+            await prisma.exam.update({
+              where: { id: e.id },
+              data: { subjectId: amlSub.id }
+            });
+            e.subject = amlSub as any;
+            e.subjectId = amlSub.id;
+          }
+        }
+      }
+
       const formatted = exams.map(e => {
         const questionsMapped = e.examQuestions
           .filter(eq => eq && eq.question)
@@ -267,7 +287,7 @@ export const FacultyController = {
 
         let displaySubjectName = `${e.subject.subjectName} (${e.subject.id.substring(0,5).toUpperCase()})`;
         if (
-          e.title.includes('EEC Course Examination') ||
+          e.title.includes('EEC') ||
           e.paperName === 'EEC Course Examination' ||
           e.examQuestions.some((eq: any) => eq.question?.paperName === 'EEC Course Examination')
         ) {
