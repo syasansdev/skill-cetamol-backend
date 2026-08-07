@@ -30,7 +30,7 @@ export const AdminController = {
           courseId: user.student?.courseId || undefined,
           departmentId: user.student?.departmentId || user.faculty?.departmentId || undefined,
           semester: user.student?.year ? user.student.year * 2 : undefined, // simple mapping of sem
-          facultyId: user.faculty?.id || undefined,
+          facultyId: user.faculty?.employeeId || user.faculty?.id || undefined,
           subjects: user.faculty ? [] : undefined // Subjects assigned can be added as needed
         };
       });
@@ -282,17 +282,29 @@ export const AdminController = {
       let studentProfileId = undefined;
 
       if (targetRole === 'faculty') {
+        let finalEmployeeId = facultyId;
+        if (!finalEmployeeId || !finalEmployeeId.trim()) {
+          const count = await prisma.faculty.count();
+          let nextId = count + 1;
+          finalEmployeeId = String(nextId);
+          while (await prisma.faculty.findUnique({ where: { employeeId: finalEmployeeId } })) {
+            nextId++;
+            finalEmployeeId = String(nextId);
+          }
+        }
+
         // Create Faculty Profile
         const faculty = await prisma.faculty.create({
           data: {
             userId: user.id,
+            employeeId: finalEmployeeId,
             departmentId: resolvedDeptId,
             collegeId: collegeId || null,
             designation: 'Lecturer',
             experience: 1
           }
         });
-        facultyProfileId = faculty.id;
+        facultyProfileId = faculty.employeeId || faculty.id;
  
         // Log details
         await prisma.activityLog.create({
@@ -803,7 +815,7 @@ export const AdminController = {
           u.faculty?.department?.departmentName ||
           'N/A',
         courseName: u.student?.course?.courseName || 'N/A',
-        registerNumber: u.student?.registerNumber || u.faculty?.id || 'N/A'
+        registerNumber: u.student?.registerNumber || u.faculty?.employeeId || u.faculty?.id || 'N/A'
       }));
 
       return res.status(200).json({
@@ -849,7 +861,7 @@ export const AdminController = {
           'N/A',
         courseName: user.student?.course?.courseName || 'N/A',
         semester: user.student?.year ? user.student.year * 2 : undefined,
-        registerNumber: user.student?.registerNumber,
+        registerNumber: user.student?.registerNumber || user.faculty?.employeeId || user.faculty?.id,
         phone: user.student?.phone,
         recentActivity: user.activityLogs.map(l => ({
           action: l.action,

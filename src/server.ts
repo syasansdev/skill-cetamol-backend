@@ -49,10 +49,41 @@ async function cleanupSeededData() {
   }
 }
 
+async function backfillFacultyEmployeeIds() {
+  try {
+    const facultiesWithoutId = await prisma.faculty.findMany({
+      where: { employeeId: null },
+      orderBy: { id: 'asc' }
+    });
+    if (facultiesWithoutId.length > 0) {
+      console.log(`[Startup] Backfilling employeeId for ${facultiesWithoutId.length} faculty profiles...`);
+      for (const fac of facultiesWithoutId) {
+        const count = await prisma.faculty.count({
+          where: { employeeId: { not: null } }
+        });
+        let nextId = count + 1;
+        let finalEmployeeId = String(nextId);
+        while (await prisma.faculty.findFirst({ where: { employeeId: finalEmployeeId } })) {
+          nextId++;
+          finalEmployeeId = String(nextId);
+        }
+        await prisma.faculty.update({
+          where: { id: fac.id },
+          data: { employeeId: finalEmployeeId }
+        });
+      }
+      console.log('[Startup] Backfill complete!');
+    }
+  } catch (err) {
+    console.error('[Startup] Error backfilling faculty employee IDs:', err);
+  }
+}
+
 async function initDb() {
   await cleanupSeededData();
   await seedQuantitativeAptitudeQuestions();
   await importGoogleDriveQuestions();
+  await backfillFacultyEmployeeIds();
 }
 
 // Configure dotenv

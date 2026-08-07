@@ -290,9 +290,18 @@ export const UploadController = {
             }
           });
 
+          const count = await prisma.faculty.count();
+          let nextId = count + 1;
+          let finalEmployeeId = String(nextId);
+          while (await prisma.faculty.findUnique({ where: { employeeId: finalEmployeeId } })) {
+            nextId++;
+            finalEmployeeId = String(nextId);
+          }
+
           const faculty = await prisma.faculty.create({
             data: {
               userId: user.id,
+              employeeId: finalEmployeeId,
               departmentId: deptId,
               designation,
               experience: expYears || 1
@@ -301,7 +310,7 @@ export const UploadController = {
 
           // Send welcome email to faculty
           try {
-            await emailService.sendFacultyAccountCreated(email, name, faculty.id, password, 'faculty');
+            await emailService.sendFacultyAccountCreated(email, name, faculty.employeeId || faculty.id, password, 'faculty');
           } catch (mailErr) {
             console.error(`[UploadController] Failed sending welcome email to ${email}:`, mailErr);
           }

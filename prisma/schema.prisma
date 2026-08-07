@@ -58,6 +58,7 @@ model Student {
 model Faculty {
   id                String             @id @default(uuid())
   userId            String             @unique
+  employeeId        String?            @unique
   departmentId      String
   collegeId         String?
   designation       String
