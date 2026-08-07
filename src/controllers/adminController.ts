@@ -518,46 +518,68 @@ export const AdminController = {
       const { name, course, courseId, semester } = req.body;
       
       let resolvedCourseId = courseId;
-      if (!resolvedCourseId && course) {
-        // Find or create Course case-insensitively
-        let crs = await prisma.course.findFirst({
-          where: { courseName: { equals: course } }
-        });
-        if (!crs) {
-          // Find the department ID of the current faculty or student
-          let deptId;
-          if (req.user) {
-            const userWithProfile = await prisma.user.findUnique({
-              where: { id: req.user.id },
-              include: { faculty: true, student: true }
-            });
-            deptId = userWithProfile?.faculty?.departmentId || userWithProfile?.student?.departmentId;
-          }
-          if (!deptId) {
-            // Fallback to first department
-            const firstDept = await prisma.department.findFirst();
-            deptId = firstDept?.id;
-          }
-          
-          if (!deptId) {
-            return res.status(400).json({ message: 'No department found. Please contact an administrator.' });
-          }
-
-          crs = await prisma.course.create({
-            data: {
-              courseName: course,
-              departmentId: deptId
-            }
-          });
-        }
-        resolvedCourseId = crs.id;
-      }
-
       if (!resolvedCourseId) {
-        return res.status(400).json({ message: 'Course is required to create a subject.' });
+        if (course) {
+          // Find or create Course case-insensitively
+          let crs = await prisma.course.findFirst({
+            where: { courseName: { equals: course } }
+          });
+          if (!crs) {
+            let deptId;
+            if (req.user) {
+              const userWithProfile = await prisma.user.findUnique({
+                where: { id: req.user.id },
+                include: { faculty: true, student: true }
+              });
+              deptId = userWithProfile?.faculty?.departmentId || userWithProfile?.student?.departmentId;
+            }
+            if (!deptId) {
+              const firstDept = await prisma.department.findFirst();
+              deptId = firstDept?.id;
+            }
+            if (!deptId) {
+              const d = await prisma.department.create({
+                data: { departmentName: 'AML', collegeId: null }
+              });
+              deptId = d.id;
+            }
+            crs = await prisma.course.create({
+              data: {
+                courseName: course,
+                departmentId: deptId
+              }
+            });
+          }
+          resolvedCourseId = crs.id;
+        } else {
+          // Fallback to default General Course
+          let defaultCourse = await prisma.course.findFirst({
+            where: { courseName: 'General Course' }
+          });
+          if (!defaultCourse) {
+            let dept = await prisma.department.findFirst({
+              where: { departmentName: { in: ['AML', 'General'] } }
+            });
+            if (!dept) {
+              dept = await prisma.department.findFirst();
+            }
+            if (!dept) {
+              dept = await prisma.department.create({
+                data: { departmentName: 'AML', collegeId: null }
+              });
+            }
+            defaultCourse = await prisma.course.create({
+              data: {
+                courseName: 'General Course',
+                departmentId: dept.id
+              }
+            });
+          }
+          resolvedCourseId = defaultCourse.id;
+        }
       }
 
-      const finalSemester = semester ? Number(semester) : 4;
+      const finalSemester = semester ? Number(semester) : 1;
 
       const subject = await prisma.subject.create({
         data: {

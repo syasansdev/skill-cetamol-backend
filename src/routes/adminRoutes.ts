@@ -21,7 +21,7 @@ router.delete('/colleges/:id', requireRole(['admin']), AdminController.deleteCol
 // Department operations
 router.get('/departments', requireRole(['admin', 'faculty']), AdminController.getDepartments);
 router.post('/departments', requireRole(['admin', 'faculty']), AdminController.createDepartment);
-router.delete('/departments/:id', requireRole(['admin']), AdminController.deleteDepartment);
+router.delete('/departments/:id', requireRole(['admin', 'faculty']), AdminController.deleteDepartment);
 
 // Course operations (accessible by admin and faculty)
 router.get('/courses', requireRole(['admin', 'faculty']), AdminController.getCourses);
