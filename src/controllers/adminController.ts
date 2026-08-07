@@ -232,6 +232,28 @@ export const AdminController = {
       const hashedPassword = await bcrypt.hash(password || 'faculty123', 10);
       const targetRole = role || 'faculty';
  
+      // Resolve college name/ID manually or select
+      let resolvedCollegeId = collegeId;
+      if (collegeId) {
+        let col = await prisma.college.findFirst({
+          where: {
+            OR: [
+              { id: collegeId },
+              { collegeName: { equals: collegeId } }
+            ]
+          }
+        });
+        if (!col) {
+          col = await prisma.college.create({
+            data: {
+              collegeName: collegeId,
+              code: collegeId.substring(0, 4).toUpperCase()
+            }
+          });
+        }
+        resolvedCollegeId = col.id;
+      }
+
       // Resolve department name/ID manually or select
       let resolvedDeptId = departmentId;
       if (departmentId) {
@@ -247,7 +269,7 @@ export const AdminController = {
           dept = await prisma.department.create({
             data: { 
               departmentName: departmentId,
-              collegeId: collegeId || null
+              collegeId: resolvedCollegeId || null
             }
           });
         }
@@ -260,7 +282,7 @@ export const AdminController = {
           dept = await prisma.department.create({
             data: { 
               departmentName: 'General',
-              collegeId: collegeId || null
+              collegeId: resolvedCollegeId || null
             }
           });
         }
@@ -299,7 +321,7 @@ export const AdminController = {
             userId: user.id,
             employeeId: finalEmployeeId,
             departmentId: resolvedDeptId,
-            collegeId: collegeId || null,
+            collegeId: resolvedCollegeId || null,
             designation: 'Lecturer',
             experience: 1
           }
