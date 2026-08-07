@@ -424,6 +424,20 @@ export async function seedAdlinData() {
 
     console.log(`✅ Successfully seeded 50 questions with 100% correct answer keys for Faculty Adlin Sheeba under subject "${subject.subjectName}" and document "${docName}"!`);
   }
+
+  // 7. Update any existing exams with title "EEC Course Examination" to link to AML Examination EEC Course subject.id
+  await prisma.exam.updateMany({
+    where: {
+      OR: [
+        { title: { contains: 'EEC Course Examination' } },
+        { paperName: 'EEC Course Examination' }
+      ]
+    },
+    data: {
+      subjectId: subject.id
+    }
+  });
+  console.log(`Updated all "EEC Course Examination" exams to point to subject "${subject.subjectName}"`);
 }
 
 if (require.main === module) {

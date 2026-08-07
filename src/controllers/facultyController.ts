@@ -319,25 +319,43 @@ export const FacultyController = {
 
       const totalMarks = Math.round(parsedQuestionCount * parsedMarksPerQuestion);
 
+      const { paperName } = req.body;
       let targetSubjectId = subjectId;
-      if (!targetSubjectId) {
-        let sub = await prisma.subject.findFirst();
-        if (!sub) {
-          let dept = await prisma.department.findFirst();
-          if (!dept) {
-            dept = await prisma.department.create({ data: { departmentName: 'General' } });
+      if (!targetSubjectId || targetSubjectId === 'all') {
+        if (questionIds && questionIds.length > 0) {
+          const firstQ = await prisma.question.findFirst({
+            where: { id: { in: questionIds } },
+            select: { subjectId: true }
+          });
+          if (firstQ && firstQ.subjectId) {
+            targetSubjectId = firstQ.subjectId;
           }
-          let course = await prisma.course.findFirst({ where: { departmentId: dept.id } });
-          if (!course) {
-            course = await prisma.course.create({ data: { courseName: 'General Evaluation Course', departmentId: dept.id } });
-          }
-          sub = await prisma.subject.create({ data: { subjectName: 'General Evaluation', courseId: course.id, semester: 1 } });
         }
-        targetSubjectId = sub.id;
+      }
+
+      if (!targetSubjectId || targetSubjectId === 'all') {
+        if (paperName) {
+          const doc = await prisma.uploadedDocument.findFirst({
+            where: { OR: [{ name: paperName }, { paperName: paperName }] },
+            select: { subjectId: true }
+          });
+          if (doc && doc.subjectId) {
+            targetSubjectId = doc.subjectId;
+          }
+        }
+      }
+
+      if (!targetSubjectId || targetSubjectId === 'all') {
+        const amlSub = await prisma.subject.findFirst({ where: { subjectName: { contains: 'AML' } } });
+        if (amlSub) {
+          targetSubjectId = amlSub.id;
+        } else {
+          const sub = await prisma.subject.findFirst();
+          if (sub) targetSubjectId = sub.id;
+        }
       }
 
       // Create Exam
-      const { paperName } = req.body;
       const exam = await prisma.exam.create({
         data: {
           title,
