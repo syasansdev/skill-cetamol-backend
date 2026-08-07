@@ -22,7 +22,7 @@ export const FacultyController = {
   getQuestions: async (req: AuthRequest, res: Response, next: NextFunction) => {
     try {
       const questions = await prisma.question.findMany({
-        include: { options: true },
+        include: { options: true, uploadedDocument: true },
         orderBy: { createdAt: 'desc' }
       });
 
@@ -51,6 +51,7 @@ export const FacultyController = {
           points: q.marks, // map marks -> points
           difficulty: q.difficulty,
           uploadedDocumentId: q.uploadedDocumentId || undefined,
+          paperName: q.paperName || q.uploadedDocument?.name || undefined,
           createdAt: q.createdAt
         };
       });
