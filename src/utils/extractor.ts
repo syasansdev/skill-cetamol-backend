@@ -219,5 +219,58 @@ export const Extractor = {
     saveCurrentQuestion();
 
     return questions;
+  },
+
+  // Parse answer key from raw unstructured text
+  parseAnswerKey: (text: string): Record<number, string[]> => {
+    const answerMap: Record<number, string[]> = {};
+    const regex = /(?:^|\s)(?:Q(?:uestion)?\s*)?(\d+)[\.\:\-\)\s]+\s*([A-Da-d](?:[\s,]+[A-Da-d])*)\b/gi;
+    let match;
+    while ((match = regex.exec(text)) !== null) {
+      const qNum = parseInt(match[1]);
+      const cleanAns = match[2]
+        .split(/[\s,]+/)
+        .map(a => a.trim().toLowerCase())
+        .filter(a => a.length > 0);
+      if (cleanAns.length > 0) {
+        answerMap[qNum] = cleanAns;
+      }
+    }
+    return answerMap;
+  },
+
+  // Parse questions from question paper and overlay correct answers from separate answer key
+  parseQuestionsWithSeparateAnswers: (qText: string, aText: string): ParsedQuestion[] => {
+    const questions = Extractor.parseUnstructuredQuestions(qText);
+    const answerMap = Extractor.parseAnswerKey(aText);
+    
+    questions.forEach((q, idx) => {
+      const qNum = idx + 1;
+      const correctAnsList = answerMap[qNum];
+      if (correctAnsList && correctAnsList.length > 0) {
+        // Reset all options to incorrect
+        q.options.forEach((opt, optIdx) => {
+          const optLetter = String.fromCharCode(65 + optIdx).toLowerCase(); // a, b, c, d
+          const isCorrect = correctAnsList.some(ans => {
+            const cleanAns = ans.toLowerCase().trim();
+            return cleanAns === optLetter || 
+                   cleanAns === opt.option.toLowerCase() ||
+                   cleanAns.startsWith(optLetter) ||
+                   opt.option.toLowerCase().includes(cleanAns);
+          });
+          opt.isCorrect = isCorrect;
+        });
+        
+        // Update question type based on correct answer count
+        const correctCount = q.options.filter(o => o.isCorrect).length;
+        if (correctCount > 1) {
+          q.type = 'checkbox';
+        } else if (correctCount === 1) {
+          q.type = 'mcq';
+        }
+      }
+    });
+    
+    return questions;
   }
 };

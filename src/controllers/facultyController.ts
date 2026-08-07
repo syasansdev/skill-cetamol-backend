@@ -990,7 +990,12 @@ export const FacultyController = {
   uploadQPaper: async (req: AuthRequest, res: Response, next: NextFunction) => {
     try {
       const { name, subjectId } = req.body;
-      if (!req.file) {
+      
+      const files = req.files as { [fieldname: string]: Express.Multer.File[] } | undefined;
+      const qpaperFile = files && files['file'] ? files['file'][0] : undefined;
+      const answerFile = files && files['answerFile'] ? files['answerFile'][0] : undefined;
+
+      if (!qpaperFile) {
         return res.status(400).json({ message: 'Document file is required' });
       }
       if (!name || !subjectId) {
@@ -1012,7 +1017,7 @@ export const FacultyController = {
         return res.status(404).json({ message: 'Subject not found' });
       }
 
-      const fileExtension = path.extname(req.file.originalname).toLowerCase().replace('.', '');
+      const fileExtension = path.extname(qpaperFile.originalname).toLowerCase().replace('.', '');
       let fileType: 'pdf' | 'docx' | 'csv' = 'pdf';
       if (fileExtension === 'docx') fileType = 'docx';
       else if (fileExtension === 'csv') fileType = 'csv';
@@ -1020,16 +1025,37 @@ export const FacultyController = {
         return res.status(400).json({ message: 'Unsupported file format. Please upload PDF, Word (.docx), or CSV.' });
       }
 
+      // Extract answer key text if provided
+      let answerText = '';
+      if (answerFile) {
+        const answerExt = path.extname(answerFile.originalname).toLowerCase().replace('.', '');
+        if (answerExt === 'pdf') {
+          answerText = await Extractor.extractTextFromPDF(answerFile.buffer);
+        } else if (answerExt === 'docx') {
+          answerText = await Extractor.extractTextFromDOCX(answerFile.buffer);
+        } else if (answerExt === 'csv' || answerExt === 'txt') {
+          answerText = answerFile.buffer.toString('utf-8');
+        }
+      }
+
       // Parse questions
       let parsedQuestions: any[] = [];
       if (fileType === 'pdf') {
-        const text = await Extractor.extractTextFromPDF(req.file.buffer);
-        parsedQuestions = Extractor.parseUnstructuredQuestions(text);
+        const text = await Extractor.extractTextFromPDF(qpaperFile.buffer);
+        if (answerFile && answerText) {
+          parsedQuestions = Extractor.parseQuestionsWithSeparateAnswers(text, answerText);
+        } else {
+          parsedQuestions = Extractor.parseUnstructuredQuestions(text);
+        }
       } else if (fileType === 'docx') {
-        const text = await Extractor.extractTextFromDOCX(req.file.buffer);
-        parsedQuestions = Extractor.parseUnstructuredQuestions(text);
+        const text = await Extractor.extractTextFromDOCX(qpaperFile.buffer);
+        if (answerFile && answerText) {
+          parsedQuestions = Extractor.parseQuestionsWithSeparateAnswers(text, answerText);
+        } else {
+          parsedQuestions = Extractor.parseUnstructuredQuestions(text);
+        }
       } else if (fileType === 'csv') {
-        const text = req.file.buffer.toString('utf-8');
+        const text = qpaperFile.buffer.toString('utf-8');
         parsedQuestions = Extractor.parseCSVQuestions(text);
       }
 
@@ -1044,7 +1070,7 @@ export const FacultyController = {
       }
       const uniqueFilename = `qpaper-${Date.now()}-${Math.round(Math.random() * 1e9)}.${fileExtension}`;
       const filePath = path.join(uploadDir, uniqueFilename);
-      fs.writeFileSync(filePath, req.file.buffer);
+      fs.writeFileSync(filePath, qpaperFile.buffer);
 
       const fileUrl = `${req.protocol}://${req.get('host')}/uploads/${uniqueFilename}`;
 

@@ -41,7 +41,10 @@ router.delete('/portions/:id', FacultyController.deletePortion);
 router.get('/student-notes', FacultyController.getStudentNotes);
 
 // Question extraction and Custom Exam setup from documents
-router.post('/upload-qpaper', upload.single('file'), FacultyController.uploadQPaper);
+router.post('/upload-qpaper', upload.fields([
+  { name: 'file', maxCount: 1 },
+  { name: 'answerFile', maxCount: 1 }
+]), FacultyController.uploadQPaper);
 router.get('/uploaded-qpapers', FacultyController.getUploadedQPapers);
 router.get('/uploaded-qpapers/:id/questions', FacultyController.getQPaperQuestions);
 router.delete('/uploaded-qpapers/:id', FacultyController.deleteUploadedQPaper);
