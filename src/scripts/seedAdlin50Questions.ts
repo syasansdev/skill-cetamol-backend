@@ -316,9 +316,15 @@ export async function seedAdlinData() {
     });
   }
 
-  // 4. Ensure User and Faculty "Adlin Sheeba" exists
+  // 4. Ensure User and Faculty "Adlin Sheeba" exists with email hodaml@stjosephs.ac.in
   let user = await prisma.user.findFirst({
-    where: { email: 'adlin.sheeba@university.edu' }
+    where: {
+      OR: [
+        { email: 'hodaml@stjosephs.ac.in' },
+        { email: 'adlin.sheeba@university.edu' },
+        { name: { contains: 'Adlin' } }
+      ]
+    }
   });
 
   const hashedPassword = await bcrypt.hash('Password@123', 10);
@@ -327,8 +333,18 @@ export async function seedAdlinData() {
     user = await prisma.user.create({
       data: {
         name: 'Adlin Sheeba',
-        email: 'adlin.sheeba@university.edu',
+        email: 'hodaml@stjosephs.ac.in',
         password: hashedPassword,
+        role: 'faculty',
+        status: 'active'
+      }
+    });
+  } else {
+    user = await prisma.user.update({
+      where: { id: user.id },
+      data: {
+        email: 'hodaml@stjosephs.ac.in',
+        name: 'Adlin Sheeba',
         role: 'faculty',
         status: 'active'
       }
