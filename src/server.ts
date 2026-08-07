@@ -79,11 +79,14 @@ async function backfillFacultyEmployeeIds() {
   }
 }
 
+import { seedAdlinData } from './scripts/seedAdlin50Questions';
+
 async function initDb() {
   await cleanupSeededData();
   await seedQuantitativeAptitudeQuestions();
   await importGoogleDriveQuestions();
   await backfillFacultyEmployeeIds();
+  await seedAdlinData();
 }
 
 // Configure dotenv
