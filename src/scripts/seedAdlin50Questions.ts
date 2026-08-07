@@ -321,7 +321,6 @@ export async function seedAdlinData() {
     where: {
       OR: [
         { email: 'hodaml@stjosephs.ac.in' },
-        { email: 'adlin.sheeba@university.edu' },
         { name: { contains: 'Adlin' } }
       ]
     }
