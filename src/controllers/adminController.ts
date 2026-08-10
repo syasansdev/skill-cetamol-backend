@@ -1177,6 +1177,21 @@ export const AdminController = {
   deleteCollege: async (req: AuthRequest, res: Response, next: NextFunction) => {
     try {
       const { id } = req.params;
+
+      const studentCount = await prisma.student.count({ where: { collegeId: id } });
+      const facultyCount = await prisma.faculty.count({ where: { collegeId: id } });
+      const departmentCount = await prisma.department.count({ where: { collegeId: id } });
+
+      if (studentCount > 0 || facultyCount > 0 || departmentCount > 0) {
+        let relations = [];
+        if (studentCount > 0) relations.push(`${studentCount} student(s)`);
+        if (facultyCount > 0) relations.push(`${facultyCount} faculty member(s)`);
+        if (departmentCount > 0) relations.push(`${departmentCount} department(s)`);
+        return res.status(400).json({ 
+          message: `Cannot delete college: it has linked ${relations.join(', ')}. Please remove or re-assign them first.` 
+        });
+      }
+
       await prisma.college.delete({ where: { id } });
       return res.status(200).json({ message: 'College deleted successfully' });
     } catch (error) {
@@ -1187,6 +1202,21 @@ export const AdminController = {
   deleteDepartment: async (req: AuthRequest, res: Response, next: NextFunction) => {
     try {
       const { id } = req.params;
+
+      const studentCount = await prisma.student.count({ where: { departmentId: id } });
+      const facultyCount = await prisma.faculty.count({ where: { departmentId: id } });
+      const courseCount = await prisma.course.count({ where: { departmentId: id } });
+
+      if (studentCount > 0 || facultyCount > 0 || courseCount > 0) {
+        let relations = [];
+        if (studentCount > 0) relations.push(`${studentCount} student(s)`);
+        if (facultyCount > 0) relations.push(`${facultyCount} faculty member(s)`);
+        if (courseCount > 0) relations.push(`${courseCount} course(s)`);
+        return res.status(400).json({ 
+          message: `Cannot delete department: it has linked ${relations.join(', ')}. Please remove or re-assign them first.` 
+        });
+      }
+
       await prisma.department.delete({ where: { id } });
       return res.status(200).json({ message: 'Department deleted successfully' });
     } catch (error) {
