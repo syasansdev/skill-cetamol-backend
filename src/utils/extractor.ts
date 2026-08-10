@@ -1,4 +1,5 @@
-const pdf = require('pdf-parse') as any;
+const pdfParser = require('pdf-parse');
+const pdf = typeof pdfParser === 'function' ? pdfParser : (pdfParser.default || pdfParser);
 import mammoth from 'mammoth';
 
 export interface ParsedQuestion {
