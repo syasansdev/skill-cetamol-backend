@@ -304,16 +304,21 @@ export const StudentController = {
         });
       }
 
+      // Clear any existing saved answers from auto-save to prevent duplicate records
+      await prisma.studentAnswer.deleteMany({
+        where: { studentExamId: studentExam.id }
+      });
+
       // Save StudentAnswers details
       await prisma.studentAnswer.createMany({ data: answerInserts });
 
       // Clip final score at 0
       const finalScore = Math.max(0, score);
 
-      // Update StudentExam raw score
+      // Update StudentExam status and raw score
       await prisma.studentExam.update({
         where: { id: studentExam.id },
-        data: { score: finalScore, submittedAt: new Date() }
+        data: { score: finalScore, status: 'submitted', submittedAt: new Date() }
       });
 
       // Calculate total exam points accurately based on evaluated questions
@@ -374,7 +379,7 @@ export const StudentController = {
         correctCount,
         wrongCount,
         skippedCount,
-        submittedAt: result.id, // placeholder mapping
+        submittedAt: new Date().toISOString(),
         rank: rankIdx
       });
     } catch (error) {

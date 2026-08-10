@@ -667,10 +667,7 @@ export const AdminController = {
         }
       });
 
-      // Clear previous student answers & assigned questions so retake generates a fresh set of random questions
-      await prisma.studentAnswer.deleteMany({
-        where: { studentExamId: id }
-      });
+      // Keep previous student answers so they can resume their exam with answers intact as expected
 
       // Create Activity Log
       await prisma.activityLog.create({
