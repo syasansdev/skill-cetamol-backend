@@ -141,6 +141,32 @@ app.get('/health', (req, res) => {
   res.status(200).json({ status: 'OK', uptime: process.uptime() });
 });
 
+// Diagnostics endpoint to check DB counts
+app.get('/api/diagnostics', async (req, res) => {
+  try {
+    const qCount = await prisma.question.count();
+    const subCount = await prisma.subject.count();
+    const fCount = await prisma.faculty.count();
+    const dCount = await prisma.department.count();
+    const uCount = await prisma.user.count();
+    const docCount = await prisma.uploadedDocument.count();
+
+    res.status(200).json({
+      status: 'OK',
+      counts: {
+        questions: qCount,
+        subjects: subCount,
+        faculty: fCount,
+        departments: dCount,
+        users: uCount,
+        uploadedDocuments: docCount
+      }
+    });
+  } catch (err: any) {
+    res.status(500).json({ status: 'Error', error: err.message || err });
+  }
+});
+
 // Setup API Routes
 app.use('/api/auth', authRouter);
 app.use('/api/admin', adminRouter);
