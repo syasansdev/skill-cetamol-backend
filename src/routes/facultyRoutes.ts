@@ -19,6 +19,8 @@ router.post('/questions/import', FacultyController.importQuestions);
 
 router.get('/exams', FacultyController.getExams);
 router.post('/exams', validateBody(createExamSchema), FacultyController.createExam);
+router.put('/exams/:id', FacultyController.updateExam);
+router.delete('/exams/:id', FacultyController.deleteExam);
 router.get('/question-papers', FacultyController.getQuestionPapers);
 
 router.get('/results', FacultyController.getResults);

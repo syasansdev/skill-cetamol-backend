@@ -458,6 +458,71 @@ export const FacultyController = {
     }
   },
 
+  // 5.1. Update Scheduled Exam
+  updateExam: async (req: AuthRequest, res: Response, next: NextFunction) => {
+    try {
+      const { id } = req.params;
+      const { title, description, duration, startTime, endTime } = req.body;
+
+      const exam = await prisma.exam.findUnique({
+        where: { id }
+      });
+
+      if (!exam) {
+        return res.status(404).json({ message: 'Exam not found' });
+      }
+
+      const updated = await prisma.exam.update({
+        where: { id },
+        data: {
+          title: title !== undefined ? title : exam.title,
+          description: description !== undefined ? description : exam.description,
+          duration: duration !== undefined ? Number(duration) : exam.duration,
+          startDate: startTime !== undefined ? new Date(startTime) : exam.startDate,
+          endDate: endTime !== undefined ? new Date(endTime) : exam.endDate,
+        },
+        include: { subject: true }
+      });
+
+      return res.status(200).json({
+        id: updated.id,
+        title: updated.title,
+        description: updated.description,
+        subjectId: updated.subjectId,
+        subjectName: updated.subject?.subjectName || 'General Evaluation',
+        duration: updated.duration,
+        startTime: updated.startDate.toISOString(),
+        endTime: updated.endDate.toISOString(),
+        status: updated.status
+      });
+    } catch (error) {
+      next(error);
+    }
+  },
+
+  // 5.2. Delete Exam
+  deleteExam: async (req: AuthRequest, res: Response, next: NextFunction) => {
+    try {
+      const { id } = req.params;
+
+      const exam = await prisma.exam.findUnique({
+        where: { id }
+      });
+
+      if (!exam) {
+        return res.status(404).json({ message: 'Exam not found' });
+      }
+
+      await prisma.exam.delete({
+        where: { id }
+      });
+
+      return res.status(200).json({ message: 'Exam deleted successfully' });
+    } catch (error) {
+      next(error);
+    }
+  },
+
   // 6. Get Exam Results for Faculty grading view
   getResults: async (req: AuthRequest, res: Response, next: NextFunction) => {
     try {
