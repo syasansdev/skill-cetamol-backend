@@ -22,9 +22,9 @@ export const registerSchema = z.object({
 export const createFacultySchema = z.object({
   name: z.string().min(2, 'Name must be at least 2 characters'),
   email: z.string().email('Invalid email format'),
-  password: z.string().min(6, 'Password must be at least 6 characters'),
+  password: z.string().min(6, 'Password must be at least 6 characters').optional().or(z.literal('')),
   facultyId: z.string().optional(),
-  departmentId: z.string().min(1, 'Department assignment is required'),
+  departmentId: z.string().optional(),
   collegeId: z.string().optional(),
   role: z.string().optional(),
   subjects: z.array(z.string()).optional()
