@@ -1,6 +1,7 @@
 import transporter from '../config/mail';
 
 const getSender = () => `"Skill Cetamol Portal" <${process.env.EMAIL_USER || 'syasanscareeranalytics@gmail.com'}>`;
+const getLoginUrl = () => `${(process.env.FRONTEND_URL || 'http://localhost:5173').replace(/\/$/, '')}/login`;
 
 export const emailService = {
   // 1. Student Registration
@@ -12,7 +13,7 @@ export const emailService = {
         <p>Congratulations! Your student account on the **Skill Cetamol Examination Portal** has been successfully registered and activated.</p>
         <p>You can now log in using the email and password you created during registration.</p>
         <div style="margin: 24px 0;">
-          <a href="http://localhost:5173/login" style="background-color: #2563eb; color: #ffffff; padding: 10px 18px; text-decoration: none; border-radius: 4px; font-weight: bold; font-size: 14px;">Access Portal Now</a>
+          <a href="${getLoginUrl()}" style="background-color: #2563eb; color: #ffffff; padding: 10px 18px; text-decoration: none; border-radius: 4px; font-weight: bold; font-size: 14px;">Access Portal Now</a>
         </div>
         <p style="color: #64748b; font-size: 13px; margin-top: 30px; border-top: 1px solid #e2e8f0; padding-top: 10px;">This is an automated notification. Please do not reply directly to this email.</p>
       </div>
@@ -34,7 +35,7 @@ export const emailService = {
         <p>Congratulations! Your student account on the **Skill Cetamol Examination Portal** has been approved by the faculty.</p>
         <p>For security, student logins are passwordless. You must log in using a <strong>Magic Code</strong> sent to your email.</p>
         <div style="margin: 24px 0;">
-          <a href="http://localhost:5173/login" style="background-color: #2563eb; color: #ffffff; padding: 10px 18px; text-decoration: none; border-radius: 4px; font-weight: bold; font-size: 14px;">Access Portal with Magic Code</a>
+          <a href="${getLoginUrl()}" style="background-color: #2563eb; color: #ffffff; padding: 10px 18px; text-decoration: none; border-radius: 4px; font-weight: bold; font-size: 14px;">Access Portal with Magic Code</a>
         </div>
         <p style="color: #64748b; font-size: 13px; margin-top: 30px; border-top: 1px solid #e2e8f0; padding-top: 10px;">Skill Cetamol Evaluation Systems</p>
       </div>
@@ -133,7 +134,7 @@ export const emailService = {
             <table width="100%" cellpadding="0" cellspacing="0">
               <tr>
                 <td align="center">
-                  <a href="http://localhost:5173/login"
+                  <a href="${getLoginUrl()}"
                      style="display:inline-block;background:linear-gradient(135deg,#2563eb,#1d4ed8);color:#ffffff;padding:14px 40px;border-radius:8px;font-size:15px;font-weight:700;text-decoration:none;letter-spacing:0.3px;box-shadow:0 4px 14px rgba(37,99,235,0.35);">
                     → Access Portal Now
                   </a>

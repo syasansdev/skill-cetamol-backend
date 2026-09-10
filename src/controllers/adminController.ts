@@ -376,6 +376,8 @@ export const AdminController = {
       }
 
       // Send Account Creation Welcome Email to the created email
+      let emailSent = false;
+      let emailError: string | null = null;
       try {
         await emailService.sendFacultyAccountCreated(
           email, 
@@ -384,8 +386,10 @@ export const AdminController = {
           password || 'faculty123',
           targetRole
         );
-      } catch (mailErr) {
+        emailSent = true;
+      } catch (mailErr: any) {
         console.error('Nodemailer welcome creation mail failed:', mailErr);
+        emailError = mailErr?.message || 'Failed to deliver welcome email';
       }
  
       // Format response matching frontend expectations
@@ -399,6 +403,8 @@ export const AdminController = {
         studentId: studentProfileId,
         departmentId: resolvedDeptId,
         subjects: subjects || [],
+        emailSent,
+        emailError,
         createdAt: user.createdAt
       });
     } catch (error) {
