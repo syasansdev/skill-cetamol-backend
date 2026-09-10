@@ -359,56 +359,37 @@ export const FacultyController = {
         return res.status(403).json({ message: 'Faculty profile not found' });
       }
 
-      const { collegeId: reqCollegeId } = req.body;
+      const { collegeId: reqCollegeId, departmentIds } = req.body;
       let targetCollegeId = reqCollegeId || faculty.collegeId;
 
-      if (!category || (category !== 'Engineering' && category !== 'Arts & Science')) {
-        return res.status(400).json({ message: 'A valid category ("Engineering" or "Arts & Science") is required.' });
-      }
-
-      if (!departmentId) {
-        return res.status(400).json({ message: 'Department selection is required.' });
-      }
-
-      let department = await prisma.department.findFirst({
-        where: {
-          id: departmentId,
-          category: category,
-          ...(targetCollegeId ? { collegeId: targetCollegeId } : {})
+      // Extract department ID(s)
+      let selectedDeptIds: string[] = [];
+      if (Array.isArray(departmentIds) && departmentIds.length > 0) {
+        selectedDeptIds = departmentIds;
+      } else if (departmentId) {
+        if (departmentId === 'all') {
+          selectedDeptIds = ['all'];
+        } else {
+          selectedDeptIds = departmentId.split(',').map((s: string) => s.trim()).filter(Boolean);
         }
-      });
-
-      if (!department) {
-        department = await prisma.department.findUnique({ where: { id: departmentId } });
       }
 
-      if (!department) {
-        return res.status(400).json({
-          message: 'The selected department was not found.'
+      const isEntireCollege = selectedDeptIds.length === 0 || selectedDeptIds.includes('all');
+
+      let primaryDept = null;
+      if (!isEntireCollege && selectedDeptIds.length > 0) {
+        primaryDept = await prisma.department.findFirst({
+          where: { id: selectedDeptIds[0] }
         });
       }
 
-      if (!targetCollegeId && department.collegeId) {
-        targetCollegeId = department.collegeId;
+      if (!targetCollegeId && primaryDept?.collegeId) {
+        targetCollegeId = primaryDept.collegeId;
       }
 
       if (!targetCollegeId) {
         const firstCollege = await prisma.college.findFirst();
         targetCollegeId = firstCollege?.id;
-      }
-
-      // If department selected belongs to another college record, match to target college by name
-      if (targetCollegeId && department.collegeId !== targetCollegeId) {
-        const matchInTargetCollege = await prisma.department.findFirst({
-          where: {
-            collegeId: targetCollegeId,
-            departmentName: department.departmentName,
-            category: category
-          }
-        });
-        if (matchInTargetCollege) {
-          department = matchInTargetCollege;
-        }
       }
 
       // Associate faculty with target college if not yet linked
@@ -417,6 +398,11 @@ export const FacultyController = {
           where: { id: faculty.id },
           data: { collegeId: targetCollegeId }
         });
+      }
+
+      let resolvedCategory = category;
+      if (!resolvedCategory || resolvedCategory === 'all' || resolvedCategory === 'All') {
+        resolvedCategory = primaryDept?.category || 'All';
       }
 
       const questionIds = questions.map((q: any) => q.id);
@@ -466,16 +452,24 @@ export const FacultyController = {
         }
       }
 
+      // Encode target departments in description metadata tag
+      let finalDescription = description || '';
+      if (!isEntireCollege && selectedDeptIds.length > 0) {
+        finalDescription += `\n<!-- TARGET_DEPTS:${selectedDeptIds.join(',')} -->`;
+      } else {
+        finalDescription += `\n<!-- TARGET_DEPTS:all -->`;
+      }
+
       // Create Exam
       const exam = await prisma.exam.create({
         data: {
           title,
-          description: description || '',
+          description: finalDescription,
           subjectId: targetSubjectId,
           facultyId: faculty.id,
           collegeId: targetCollegeId,
-          category: category,
-          departmentId: department.id,
+          category: resolvedCategory,
+          departmentId: primaryDept?.id || null,
           paperName: paperName || null,
           duration: Number(duration),
           totalMarks,
@@ -497,14 +491,17 @@ export const FacultyController = {
 
       await prisma.examQuestion.createMany({ data: relationData });
 
-      // Notify Active Enrolled Students of this College + Category + Department via Email
+      // Notify Active Enrolled Students of this College & Target Department(s) via Email
+      const studentWhere: any = {
+        collegeId: targetCollegeId,
+        user: { status: 'active' }
+      };
+      if (!isEntireCollege && selectedDeptIds.length > 0) {
+        studentWhere.departmentId = { in: selectedDeptIds };
+      }
+
       const enrolledStudents = await prisma.student.findMany({
-        where: {
-          collegeId: targetCollegeId,
-          category: category,
-          departmentId: department.id,
-          user: { status: 'active' }
-        },
+        where: studentWhere,
         include: { user: true }
       });
 
@@ -869,6 +866,19 @@ export const FacultyController = {
         departments = await prisma.department.findMany({
           where: { category },
           orderBy: { departmentName: 'asc' }
+        });
+      }
+
+      // Also ensure any departments typed by registered students in this college are included
+      if (resolvedCollegeId) {
+        const studentDepts = await prisma.student.findMany({
+          where: { collegeId: resolvedCollegeId },
+          include: { department: true }
+        });
+        studentDepts.forEach(s => {
+          if (s.department && !departments.some(d => d.id === s.department.id)) {
+            departments.push(s.department);
+          }
         });
       }
 

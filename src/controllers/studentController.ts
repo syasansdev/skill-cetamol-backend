@@ -24,11 +24,9 @@ export const StudentController = {
         return res.status(200).json([]);
       }
 
-      const allExams = await prisma.exam.findMany({
+      const collegeExams = await prisma.exam.findMany({
         where: {
-          collegeId: student.collegeId,
-          category: student.category,
-          departmentId: student.departmentId
+          collegeId: student.collegeId
         },
         include: {
           college: true,
@@ -42,6 +40,24 @@ export const StudentController = {
           }
         },
         orderBy: { startDate: 'desc' }
+      });
+
+      const allExams = collegeExams.filter(exam => {
+        // 1. Department check via TARGET_DEPTS metadata tag
+        const deptMatch = exam.description?.match(/<!-- TARGET_DEPTS:(.*?) -->/);
+        if (deptMatch && deptMatch[1]) {
+          const allowedIds = deptMatch[1].split(',').map(s => s.trim()).filter(Boolean);
+          if (allowedIds.includes('all')) return true;
+          return student.departmentId ? allowedIds.includes(student.departmentId) : false;
+        }
+
+        // 2. If departmentId is null or 'all', visible to all departments in the college
+        if (!exam.departmentId || exam.departmentId === 'all') return true;
+
+        // 3. Direct single department match
+        if (exam.departmentId === student.departmentId) return true;
+
+        return false;
       });
 
       const results = await prisma.result.findMany({

@@ -19,7 +19,7 @@ export const AuthController = {
   // 1. User/Student Register
   register: async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const { name, email: rawEmail, password, role, registerNumber, departmentId, collegeId, category, courseId, yearOfPassing } = req.body;
+      const { name, email: rawEmail, password, role, registerNumber, departmentId, departmentName, collegeId, category, courseId, yearOfPassing, batch } = req.body;
       const email = rawEmail.toLowerCase();
 
       // Check if email already exists
@@ -36,8 +36,9 @@ export const AuthController = {
         if (!category || !['Engineering', 'Arts & Science'].includes(category)) {
           return res.status(400).json({ message: 'Valid course category (Engineering or Arts & Science) is required' });
         }
-        if (!departmentId) {
-          return res.status(400).json({ message: 'Department / Course is required for students' });
+        const rawDept = (departmentName || departmentId || '').trim();
+        if (!rawDept) {
+          return res.status(400).json({ message: 'Department / Branch is required for students' });
         }
         if (!registerNumber || !registerNumber.trim()) {
           return res.status(400).json({ message: 'Registration number is required for students' });
@@ -64,22 +65,38 @@ export const AuthController = {
           return res.status(400).json({ message: 'Selected college does not exist' });
         }
 
-        // Verify department exists AND belongs to selected College AND selected Category
-        const dept = await prisma.department.findFirst({
+        // Find or auto-create department for this college based on student's input
+        let dept = await prisma.department.findFirst({
           where: {
             OR: [
-              { id: departmentId },
-              { departmentName: { equals: departmentId, mode: 'insensitive' } }
+              { id: rawDept },
+              { departmentName: { equals: rawDept, mode: 'insensitive' } }
             ],
-            collegeId: college.id,
-            category: category
+            collegeId: college.id
           }
         });
 
         if (!dept) {
-          return res.status(400).json({ 
-            message: 'Invalid selection: The selected department/course does not belong to the chosen college and category.' 
+          const globalDept = await prisma.department.findFirst({
+            where: {
+              departmentName: { equals: rawDept, mode: 'insensitive' }
+            }
           });
+
+          if (globalDept && !globalDept.collegeId) {
+            dept = await prisma.department.update({
+              where: { id: globalDept.id },
+              data: { collegeId: college.id, category: category || globalDept.category }
+            });
+          } else {
+            dept = await prisma.department.create({
+              data: {
+                departmentName: rawDept,
+                category: category || 'Engineering',
+                collegeId: college.id
+              }
+            });
+          }
         }
 
         // Hash password
@@ -101,15 +118,24 @@ export const AuthController = {
         if (!targetCourseId) {
           let crs = await prisma.course.findFirst({ where: { departmentId: dept.id } });
           if (!crs) {
-            crs = await prisma.course.create({
-              data: {
-                courseName: `${dept.departmentName} - ${college.collegeName.substring(0, 15)}`,
-                departmentId: dept.id
-              }
-            });
+            const safeCourseName = `${dept.departmentName} - ${college.collegeName} - ${college.id.substring(0, 4)}`;
+            crs = await prisma.course.findUnique({ where: { courseName: safeCourseName } });
+            if (!crs) {
+              crs = await prisma.course.create({
+                data: {
+                  courseName: safeCourseName,
+                  departmentId: dept.id
+                }
+              });
+            }
           }
-          targetCourseId = crs.id;
+          targetCourseId = crs ? crs.id : undefined;
         }
+
+        const rawBatch = batch || yearOfPassing || new Date().getFullYear();
+        const parsedYear = typeof rawBatch === 'number'
+          ? rawBatch
+          : parseInt(String(rawBatch).replace(/\D/g, '').slice(-4) || '2026', 10) || 2026;
 
         await prisma.student.create({
           data: {
@@ -119,7 +145,7 @@ export const AuthController = {
             category: category,
             collegeId: college.id,
             courseId: targetCourseId,
-            year: Number(yearOfPassing || 1),
+            year: parsedYear,
             phone: '',
             address: '',
             photoUrl: null

@@ -16,8 +16,10 @@ export const registerSchema = z.object({
   collegeId: z.string().optional(),
   category: z.enum(['Engineering', 'Arts & Science']).optional(),
   departmentId: z.string().optional(),
+  departmentName: z.string().optional(),
   courseId: z.string().optional(),
   yearOfPassing: z.number().or(z.string()).optional(),
+  batch: z.number().or(z.string()).optional(),
   photoUrl: z.string().optional()
 });
 
@@ -46,8 +48,10 @@ export const createExamSchema = z.object({
   title: z.string().min(2, 'Exam title must be specified'),
   description: z.string().optional(),
   subjectId: z.string().optional(),
-  category: z.enum(['Engineering', 'Arts & Science']).optional(),
+  category: z.string().optional(),
   departmentId: z.string().optional(),
+  departmentIds: z.array(z.string()).optional(),
+  collegeId: z.string().optional(),
   duration: z.number().min(5, 'Exam must be at least 5 minutes'),
   startTime: z.string().or(z.date()),
   endTime: z.string().or(z.date()),
