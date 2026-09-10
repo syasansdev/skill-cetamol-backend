@@ -7,7 +7,7 @@ import { randomUUID } from 'crypto';
 export async function importGoogleDriveQuestions() {
   try {
     // 1. Check if Placement Training dept already exists (skip if already set up)
-    const existingDept = await prisma.department.findUnique({
+    const existingDept = await prisma.department.findFirst({
       where: { departmentName: 'Placement Training' }
     });
     
@@ -107,11 +107,14 @@ export async function importGoogleDriveQuestions() {
     // 3. Create Department, Course, User, and Faculty in database
     console.log('Creating database records for Placement Training...');
     
-    const dept = await prisma.department.upsert({
-      where: { departmentName: 'Placement Training' },
-      update: {},
-      create: { departmentName: 'Placement Training' }
+    let dept = await prisma.department.findFirst({
+      where: { departmentName: 'Placement Training' }
     });
+    if (!dept) {
+      dept = await prisma.department.create({
+        data: { departmentName: 'Placement Training' }
+      });
+    }
 
     const course = await prisma.course.upsert({
       where: { courseName: 'Aptitude & Practice' },
@@ -146,19 +149,30 @@ export async function importGoogleDriveQuestions() {
       }
     });
 
-    // 4. Create Subjects for each Category
-    console.log('Creating Subjects...');
-    const subjectIdMap = new Map<number, string>();
-    for (const [catId, catDesc] of categoryMap.entries()) {
-      const subject = await prisma.subject.create({
+    // Helper to strip hardcoded question number prefixes like Q1., 44.
+    const cleanQuestionPrefix = (text: string): string => {
+      if (!text) return '';
+      return text.replace(/^(?:q(?:uestion)?\s*\d+[\s.:)\-–—]+|\d+\s*[\.\)]\s+)/i, '').trim();
+    };
+
+    // 4. Create or find Single Unified Subject: "Aptitude"
+    console.log('Setting up single unified Aptitude subject...');
+    let unifiedSubject = await prisma.subject.findFirst({
+      where: {
+        subjectName: 'Aptitude',
+        courseId: course.id
+      }
+    });
+    if (!unifiedSubject) {
+      unifiedSubject = await prisma.subject.create({
         data: {
-          subjectName: catDesc,
+          subjectName: 'Aptitude',
           courseId: course.id,
           semester: 1
         }
       });
-      subjectIdMap.set(catId, subject.id);
     }
+
 
     // 5. Build questions and options list
     console.log('Building question models...');
@@ -170,14 +184,14 @@ export async function importGoogleDriveQuestions() {
       const qId = randomUUID();
       const subCatId = Number(tuple[1]);
       const diffLevel = Number(tuple[2]);
-      const questionText = String(tuple[3]).trim();
+      const rawQuestionText = String(tuple[3]).trim();
+      const questionText = cleanQuestionPrefix(rawQuestionText);
       const facultyId = faculty.id;
       
       const subCat = subCategoryMap.get(subCatId);
       if (!subCat) continue;
 
-      const subjectId = subjectIdMap.get(subCat.categoryId);
-      if (!subjectId) continue;
+      const catDesc = categoryMap.get(subCat.categoryId) || 'General Aptitude';
 
       let difficulty = 'easy';
       if (diffLevel === 2) difficulty = 'medium';
@@ -190,7 +204,8 @@ export async function importGoogleDriveQuestions() {
         difficulty,
         marks: 5,
         facultyId,
-        subjectId,
+        subjectId: unifiedSubject.id,
+        paperName: catDesc,
         createdAt: new Date()
       });
 
@@ -215,7 +230,7 @@ export async function importGoogleDriveQuestions() {
     for (const tuple of passagesQuestionsRaw) {
       const qId = randomUUID();
       const passageId = Number(tuple[1]);
-      const rawQuestionText = String(tuple[2]).trim();
+      const rawQuestionText = cleanQuestionPrefix(String(tuple[2]).trim());
       const facultyId = faculty.id;
       
       const passage = passagesMap.get(passageId);
@@ -224,9 +239,7 @@ export async function importGoogleDriveQuestions() {
       const subCat = subCategoryMap.get(passage.categoryId);
       if (!subCat) continue;
 
-      const subjectId = subjectIdMap.get(subCat.categoryId);
-      if (!subjectId) continue;
-
+      const catDesc = categoryMap.get(subCat.categoryId) || 'General Aptitude';
       const questionText = `[Passage: ${passage.text}]\n\n${rawQuestionText}`;
 
       questionsToCreate.push({
@@ -236,7 +249,8 @@ export async function importGoogleDriveQuestions() {
         difficulty: 'medium',
         marks: 5,
         facultyId,
-        subjectId,
+        subjectId: unifiedSubject.id,
+        paperName: catDesc,
         createdAt: new Date()
       });
 

@@ -526,7 +526,7 @@ export const UploadController = {
         preview.push({ name });
 
         if (errors.length === 0) {
-          const dbDept = await prisma.department.findUnique({ where: { departmentName: name } });
+          const dbDept = await prisma.department.findFirst({ where: { departmentName: name } });
           if (dbDept) {
             errors.push(`Department already exists: ${name}`);
             duplicateRecords++;

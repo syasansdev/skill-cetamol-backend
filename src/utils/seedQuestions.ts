@@ -149,7 +149,7 @@ export async function seedQuantitativeAptitudeQuestions() {
     console.log('Checking for "Quantitative Ability-Pattern 1" subject and questions...');
 
     // 1. Resolve general CSE department
-    let cseDept = await prisma.department.findUnique({
+    let cseDept = await prisma.department.findFirst({
       where: { departmentName: 'Computer Science & Engineering' }
     });
     if (!cseDept) {
@@ -170,17 +170,17 @@ export async function seedQuantitativeAptitudeQuestions() {
 
     // 3. Resolve Subject
     let subject = await prisma.subject.findFirst({
-      where: { subjectName: 'Quantitative Ability-Pattern 1' }
+      where: { subjectName: 'Aptitude' }
     });
     if (!subject) {
       subject = await prisma.subject.create({
         data: {
-          subjectName: 'Quantitative Ability-Pattern 1',
+          subjectName: 'Aptitude',
           courseId: cseCourse.id,
-          semester: 4
+          semester: 1
         }
       });
-      console.log('Created subject: Quantitative Ability-Pattern 1');
+      console.log('Created subject: Aptitude');
     }
 
     // 4. Resolve administrator user & faculty profile

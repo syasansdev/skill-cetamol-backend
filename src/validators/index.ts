@@ -13,6 +13,8 @@ export const registerSchema = z.object({
   
   // Student registration optional parameters
   registerNumber: z.string().optional(),
+  collegeId: z.string().optional(),
+  category: z.enum(['Engineering', 'Arts & Science']).optional(),
   departmentId: z.string().optional(),
   courseId: z.string().optional(),
   yearOfPassing: z.number().or(z.string()).optional(),
@@ -25,7 +27,7 @@ export const createFacultySchema = z.object({
   password: z.string().min(6, 'Password must be at least 6 characters').optional().or(z.literal('')),
   facultyId: z.string().optional(),
   departmentId: z.string().optional(),
-  collegeId: z.string().optional(),
+  collegeId: z.string().min(1, 'College is required for faculty'),
   role: z.string().optional(),
   subjects: z.array(z.string()).optional()
 });
@@ -44,6 +46,8 @@ export const createExamSchema = z.object({
   title: z.string().min(2, 'Exam title must be specified'),
   description: z.string().optional(),
   subjectId: z.string().optional(),
+  category: z.enum(['Engineering', 'Arts & Science']).optional(),
+  departmentId: z.string().optional(),
   duration: z.number().min(5, 'Exam must be at least 5 minutes'),
   startTime: z.string().or(z.date()),
   endTime: z.string().or(z.date()),

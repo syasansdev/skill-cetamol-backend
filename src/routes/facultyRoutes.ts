@@ -22,6 +22,7 @@ router.post('/exams', validateBody(createExamSchema), FacultyController.createEx
 router.put('/exams/:id', FacultyController.updateExam);
 router.delete('/exams/:id', FacultyController.deleteExam);
 router.get('/question-papers', FacultyController.getQuestionPapers);
+router.get('/departments', FacultyController.getDepartments);
 
 router.get('/results', FacultyController.getResults);
 router.get('/pending-students', FacultyController.getPendingStudents);

@@ -207,8 +207,23 @@ export const FacultyController = {
   // 4. Get Exams
   getExams: async (req: AuthRequest, res: Response, next: NextFunction) => {
     try {
+      let whereClause: any = {};
+      if (req.user) {
+        const faculty = await prisma.faculty.findUnique({
+          where: { userId: req.user.id }
+        });
+        if (faculty?.collegeId) {
+          whereClause.collegeId = faculty.collegeId;
+        } else if (faculty) {
+          whereClause.facultyId = faculty.id;
+        }
+      }
+
       const exams = await prisma.exam.findMany({
+        where: whereClause,
         include: {
+          college: true,
+          department: true,
           subject: true,
           faculty: { include: { user: true } },
           examQuestions: {
@@ -227,7 +242,7 @@ export const FacultyController = {
       for (const e of exams) {
         if (
           (e.title.includes('EEC') || e.paperName?.includes('EEC') || e.title.includes('Course Examination')) &&
-          !e.subject.subjectName.includes('AML')
+          e.subject && !e.subject.subjectName.includes('AML')
         ) {
           const amlSub = await prisma.subject.findFirst({
             where: { subjectName: { contains: 'AML' } }
@@ -285,13 +300,13 @@ export const FacultyController = {
           }
         }
 
-        let displaySubjectName = `${e.subject.subjectName} (${e.subject.id.substring(0,5).toUpperCase()})`;
+        let displaySubjectName = e.subject ? `${e.subject.subjectName} (${e.subject.id.substring(0,5).toUpperCase()})` : 'Evaluation';
         if (
           e.title.includes('EEC') ||
           e.paperName === 'EEC Course Examination' ||
           e.examQuestions.some((eq: any) => eq.question?.paperName === 'EEC Course Examination')
         ) {
-          displaySubjectName = `AML Examination EEC Course (${e.subjectId.substring(0,5).toUpperCase()})`;
+          displaySubjectName = `AML Examination EEC Course (${e.subjectId ? e.subjectId.substring(0,5).toUpperCase() : 'EEC'})`;
         }
 
         return {
@@ -300,12 +315,17 @@ export const FacultyController = {
           description: e.description,
           subjectId: e.subjectId,
           subjectName: displaySubjectName,
+          collegeId: e.collegeId,
+          collegeName: e.college?.collegeName || 'N/A',
+          category: e.category,
+          departmentId: e.departmentId,
+          departmentName: e.department?.departmentName || 'N/A',
           duration: e.duration,
           startTime: e.startDate.toISOString(), // map startDate -> startTime
           endTime: e.endDate.toISOString(), // map endDate -> endTime
           questions: questionsMapped,
-          createdBy: e.faculty.user.id,
-          createdByName: e.faculty.user.name,
+          createdBy: e.faculty?.user?.id || '',
+          createdByName: e.faculty?.user?.name || 'Faculty',
           status: dynamicStatus,
           questionCount: e.questionCount,
           negativeMarking: e.negativeMarking,
@@ -326,15 +346,43 @@ export const FacultyController = {
     try {
       const {
         title, description, subjectId, duration, startTime, endTime, questions,
-        questionCount, negativeMarking, marksPerQuestion, negativeMarks
+        questionCount, negativeMarking, marksPerQuestion, negativeMarks,
+        category, departmentId
       } = req.body;
 
       const faculty = await prisma.faculty.findUnique({
-        where: { userId: req.user!.id }
+        where: { userId: req.user!.id },
+        include: { college: true }
       });
 
       if (!faculty) {
         return res.status(403).json({ message: 'Faculty profile not found' });
+      }
+
+      if (!faculty.collegeId) {
+        return res.status(400).json({ message: 'Faculty must be associated with a college to create exams.' });
+      }
+
+      if (!category || (category !== 'Engineering' && category !== 'Arts & Science')) {
+        return res.status(400).json({ message: 'A valid category ("Engineering" or "Arts & Science") is required.' });
+      }
+
+      if (!departmentId) {
+        return res.status(400).json({ message: 'Department selection is required.' });
+      }
+
+      const department = await prisma.department.findFirst({
+        where: {
+          id: departmentId,
+          collegeId: faculty.collegeId,
+          category: category
+        }
+      });
+
+      if (!department) {
+        return res.status(400).json({
+          message: 'The selected department does not belong to your college under the chosen category.'
+        });
       }
 
       const questionIds = questions.map((q: any) => q.id);
@@ -391,8 +439,9 @@ export const FacultyController = {
           description: description || '',
           subjectId: targetSubjectId,
           facultyId: faculty.id,
-          departmentId: faculty.departmentId,
           collegeId: faculty.collegeId,
+          category: category,
+          departmentId: department.id,
           paperName: paperName || null,
           duration: Number(duration),
           totalMarks,
@@ -414,29 +463,29 @@ export const FacultyController = {
 
       await prisma.examQuestion.createMany({ data: relationData });
 
-      // Notify Students of this Course via Email
-      const subject = await prisma.subject.findUnique({
-        where: { id: subjectId }
+      // Notify Active Enrolled Students of this College + Category + Department via Email
+      const enrolledStudents = await prisma.student.findMany({
+        where: {
+          collegeId: faculty.collegeId,
+          category: category,
+          departmentId: department.id,
+          user: { status: 'active' }
+        },
+        include: { user: true }
       });
-      if (subject) {
-        const enrolledStudents = await prisma.student.findMany({
-          where: { courseId: subject.courseId, user: { status: 'active' } },
-          include: { user: true }
-        });
 
-        for (const std of enrolledStudents) {
-          try {
-            await emailService.sendExamScheduled(std.user.email, std.user.name, title, startTime);
-          } catch (mailErr) {
-            console.error(`Failed notifying student ${std.user.email}:`, mailErr);
-          }
+      for (const std of enrolledStudents) {
+        try {
+          await emailService.sendExamScheduled(std.user.email, std.user.name, title, startTime);
+        } catch (mailErr) {
+          console.error(`Failed notifying student ${std.user.email}:`, mailErr);
         }
       }
 
       // Format response user details matching frontend expectation
       const fullExam = await prisma.exam.findUnique({
         where: { id: exam.id },
-        include: { subject: true }
+        include: { subject: true, college: true, department: true }
       });
 
       return res.status(201).json({
@@ -444,7 +493,12 @@ export const FacultyController = {
         title: exam.title,
         description: exam.description,
         subjectId: exam.subjectId,
-        subjectName: fullExam?.subject.subjectName,
+        subjectName: fullExam?.subject?.subjectName,
+        collegeId: exam.collegeId,
+        collegeName: fullExam?.college?.collegeName,
+        category: exam.category,
+        departmentId: exam.departmentId,
+        departmentName: fullExam?.department?.departmentName,
         duration: exam.duration,
         startTime: exam.startDate.toISOString(),
         endTime: exam.endDate.toISOString(),
@@ -462,14 +516,86 @@ export const FacultyController = {
   updateExam: async (req: AuthRequest, res: Response, next: NextFunction) => {
     try {
       const { id } = req.params;
-      const { title, description, duration, startTime, endTime } = req.body;
+      const {
+        title,
+        description,
+        duration,
+        startTime,
+        endTime,
+        questionCount,
+        marksPerQuestion,
+        negativeMarks,
+        negativeMarking,
+        questions
+      } = req.body;
 
       const exam = await prisma.exam.findUnique({
-        where: { id }
+        where: { id },
+        include: { examQuestions: true }
       });
 
       if (!exam) {
         return res.status(404).json({ message: 'Exam not found' });
+      }
+
+      // If specific questions array is provided, update the linked questions
+      if (Array.isArray(questions) && questions.length > 0) {
+        const questionIds: string[] = questions.map((q: any) => typeof q === 'string' ? q : q.id);
+        await prisma.examQuestion.deleteMany({
+          where: { examId: id }
+        });
+        await prisma.examQuestion.createMany({
+          data: questionIds.map((qId: string) => ({
+            examId: id,
+            questionId: qId
+          })),
+          skipDuplicates: true
+        });
+      }
+
+      const parsedQCount = questionCount !== undefined ? Math.max(1, Number(questionCount)) : exam.questionCount;
+      const parsedMarksPerQ = marksPerQuestion !== undefined ? Number(marksPerQuestion) : (exam.marksPerQuestion || 1);
+      const parsedTotalMarks = Math.round(parsedQCount * parsedMarksPerQ);
+
+      // If questionCount was increased beyond currently assigned questions, ensure exam has enough pool questions
+      const currentAssignedCount = await prisma.examQuestion.count({ where: { examId: id } });
+      if (currentAssignedCount < parsedQCount) {
+        const needed = parsedQCount - currentAssignedCount;
+        const existingEqs = await prisma.examQuestion.findMany({
+          where: { examId: id },
+          select: { questionId: true }
+        });
+        const existingQIds = existingEqs.map(e => e.questionId);
+
+        let additionalQuestions = await prisma.question.findMany({
+          where: {
+            id: { notIn: existingQIds },
+            ...(exam.subjectId ? { subjectId: exam.subjectId } : {})
+          },
+          take: needed,
+          select: { id: true }
+        });
+
+        if (additionalQuestions.length < needed) {
+          const stillNeeded = needed - additionalQuestions.length;
+          const foundIds = [...existingQIds, ...additionalQuestions.map(q => q.id)];
+          const moreQ = await prisma.question.findMany({
+            where: { id: { notIn: foundIds } },
+            take: stillNeeded,
+            select: { id: true }
+          });
+          additionalQuestions = [...additionalQuestions, ...moreQ];
+        }
+
+        if (additionalQuestions.length > 0) {
+          await prisma.examQuestion.createMany({
+            data: additionalQuestions.map(q => ({
+              examId: id,
+              questionId: q.id
+            })),
+            skipDuplicates: true
+          });
+        }
       }
 
       const updated = await prisma.exam.update({
@@ -480,8 +606,16 @@ export const FacultyController = {
           duration: duration !== undefined ? Number(duration) : exam.duration,
           startDate: startTime !== undefined ? new Date(startTime) : exam.startDate,
           endDate: endTime !== undefined ? new Date(endTime) : exam.endDate,
+          questionCount: parsedQCount,
+          marksPerQuestion: parsedMarksPerQ,
+          negativeMarks: negativeMarks !== undefined ? Number(negativeMarks) : exam.negativeMarks,
+          negativeMarking: negativeMarking !== undefined ? Boolean(negativeMarking) : exam.negativeMarking,
+          totalMarks: parsedTotalMarks
         },
-        include: { subject: true }
+        include: {
+          subject: true,
+          examQuestions: { include: { question: { include: { options: true } } } }
+        }
       });
 
       return res.status(200).json({
@@ -489,16 +623,28 @@ export const FacultyController = {
         title: updated.title,
         description: updated.description,
         subjectId: updated.subjectId,
-        subjectName: updated.subject?.subjectName || 'General Evaluation',
+        subjectName: updated.subject?.subjectName || 'Aptitude',
         duration: updated.duration,
+        questionCount: updated.questionCount,
         startTime: updated.startDate.toISOString(),
         endTime: updated.endDate.toISOString(),
-        status: updated.status
+        totalMarks: updated.totalMarks,
+        marksPerQuestion: updated.marksPerQuestion,
+        negativeMarking: updated.negativeMarking,
+        negativeMarks: updated.negativeMarks,
+        status: updated.status,
+        questions: updated.examQuestions.map(eq => ({
+          id: eq.question.id,
+          text: eq.question.question,
+          type: eq.question.type,
+          points: eq.question.marks
+        }))
       });
     } catch (error) {
       next(error);
     }
   },
+
 
   // 5.2. Delete Exam
   deleteExam: async (req: AuthRequest, res: Response, next: NextFunction) => {
@@ -526,18 +672,22 @@ export const FacultyController = {
   // 6. Get Exam Results for Faculty grading view
   getResults: async (req: AuthRequest, res: Response, next: NextFunction) => {
     try {
-      let facultyDeptId: string | undefined = undefined;
+      let facultyCollegeId: string | undefined = undefined;
+      let facultyId: string | undefined = undefined;
       if (req.user) {
         const faculty = await prisma.faculty.findFirst({ where: { userId: req.user.id } });
         if (faculty) {
-          facultyDeptId = faculty.departmentId;
+          facultyCollegeId = faculty.collegeId || undefined;
+          facultyId = faculty.id;
         }
       }
 
       const results = await prisma.result.findMany({
-        where: facultyDeptId ? {
-          student: { departmentId: facultyDeptId }
-        } : {},
+        where: facultyCollegeId ? {
+          student: { collegeId: facultyCollegeId }
+        } : (facultyId ? {
+          exam: { facultyId }
+        } : {}),
         include: {
           student: { include: { user: true, department: true } },
           exam: {
@@ -592,6 +742,8 @@ export const FacultyController = {
           studentId: r.student?.user?.id || '',
           studentName: r.student?.user?.name || 'Student',
           studentRollNo: r.student?.registerNumber || '',
+          departmentName: r.student?.department?.departmentName || 'General',
+          studentDepartment: r.student?.department?.departmentName || 'General',
           score: rawScore,
           totalPoints,
           percentage: r.percentage,
@@ -610,16 +762,26 @@ export const FacultyController = {
   // 7. Get Pending Students for Faculty approval view
   getPendingStudents: async (req: AuthRequest, res: Response, next: NextFunction) => {
     try {
+      let facultyCollegeId: string | undefined = undefined;
+      if (req.user) {
+        const faculty = await prisma.faculty.findFirst({ where: { userId: req.user.id } });
+        if (faculty?.collegeId) {
+          facultyCollegeId = faculty.collegeId;
+        }
+      }
+
       const students = await prisma.user.findMany({
         where: {
           role: 'student',
-          status: 'pending'
+          status: 'pending',
+          ...(facultyCollegeId ? { student: { collegeId: facultyCollegeId } } : {})
         },
         include: {
           student: {
             include: {
               department: true,
-              course: true
+              course: true,
+              college: true
             }
           }
         },
@@ -631,13 +793,45 @@ export const FacultyController = {
         name: user.name,
         email: user.email,
         registerNumber: user.student?.registerNumber || '',
-        departmentName: user.student?.department.departmentName || '',
-        courseName: user.student?.course.courseName || '',
+        collegeName: user.student?.college?.collegeName || '',
+        category: user.student?.category || '',
+        departmentName: user.student?.department?.departmentName || '',
+        courseName: user.student?.course?.courseName || '',
         photoUrl: formatPhotoUrl(req, user.photoUrl || user.student?.photoUrl) || '',
         createdAt: user.createdAt.toISOString()
       }));
 
       return res.status(200).json(formatted);
+    } catch (error) {
+      next(error);
+    }
+  },
+
+  // 7.1 Get Departments for Faculty's College
+  getDepartments: async (req: AuthRequest, res: Response, next: NextFunction) => {
+    try {
+      const faculty = await prisma.faculty.findUnique({
+        where: { userId: req.user!.id }
+      });
+      if (!faculty || !faculty.collegeId) {
+        return res.status(200).json([]);
+      }
+
+      const { category } = req.query as { category?: string };
+      const where: any = { collegeId: faculty.collegeId };
+      if (category) where.category = category;
+
+      const departments = await prisma.department.findMany({
+        where,
+        orderBy: { departmentName: 'asc' }
+      });
+
+      return res.status(200).json(departments.map(d => ({
+        id: d.id,
+        departmentName: d.departmentName,
+        category: d.category,
+        collegeId: d.collegeId
+      })));
     } catch (error) {
       next(error);
     }
@@ -702,6 +896,8 @@ export const FacultyController = {
           startDate: { gte: new Date() }
         },
         include: {
+          college: true,
+          department: true,
           subject: {
             include: {
               course: { include: { department: true } }
@@ -717,10 +913,12 @@ export const FacultyController = {
         title: e.title,
         description: e.description,
         subjectId: e.subjectId,
-        subjectName: e.subject.subjectName,
-        courseName: e.subject.course.courseName,
-        departmentName: e.subject.course.department.departmentName,
-        semester: e.subject.semester,
+        subjectName: e.subject?.subjectName || 'Evaluation',
+        courseName: e.subject?.course?.courseName || 'N/A',
+        departmentName: e.department?.departmentName || e.subject?.course?.department?.departmentName || 'N/A',
+        collegeName: e.college?.collegeName || 'N/A',
+        category: e.category,
+        semester: e.subject?.semester || 1,
         duration: e.duration,
         startTime: e.startDate.toISOString(),
         endTime: e.endDate.toISOString(),
@@ -1514,7 +1712,7 @@ export const FacultyController = {
         const faculty = await prisma.faculty.findFirst({ where: { userId: req.user.id } });
         if (faculty) {
           facultyId = faculty.id;
-          facultyDeptId = faculty.departmentId;
+          facultyDeptId = faculty.departmentId || undefined;
         }
       }
 

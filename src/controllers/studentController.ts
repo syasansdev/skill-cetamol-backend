@@ -3,6 +3,11 @@ import prisma from '../config/db';
 import { emailService } from '../services/emailService';
 import { AuthRequest } from '../middleware/auth';
 
+function cleanQuestionText(text: string): string {
+  if (!text) return '';
+  return text.replace(/^(?:q(?:uestion)?\s*\d+[\s.:)\-–—]+|\d+\s*[\.\)]\s+)/i, '').trim();
+}
+
 export const StudentController = {
   // 1. Get Exams for Student Dashboard
   getExams: async (req: AuthRequest, res: Response, next: NextFunction) => {
@@ -15,8 +20,19 @@ export const StudentController = {
         return res.status(403).json({ message: 'Student profile not found' });
       }
 
+      if (!student.collegeId || !student.category || !student.departmentId) {
+        return res.status(200).json([]);
+      }
+
       const allExams = await prisma.exam.findMany({
+        where: {
+          collegeId: student.collegeId,
+          category: student.category,
+          departmentId: student.departmentId
+        },
         include: {
+          college: true,
+          department: true,
           subject: true,
           faculty: { include: { user: true } },
           examQuestions: {
@@ -81,11 +97,15 @@ export const StudentController = {
         // Randomize questions for this student attempt (stable per student + exam)
         const seedStr = `${student.id}-${exam.id}`;
         const shuffledEqs = pseudoRandomShuffle(exam.examQuestions || [], seedStr);
-        const validEqs = shuffledEqs.filter(eq => eq && eq.question);
-        const selectedEqs = validEqs;
+        const validEqs = shuffledEqs.filter((eq: any) => eq && eq.question);
+        const countLimit = exam.questionCount && exam.questionCount > 0 ? exam.questionCount : validEqs.length;
+        const selectedEqs = validEqs.slice(0, countLimit);
 
-        const questionsMapped = selectedEqs.map(eq => {
+
+
+        const questionsMapped = selectedEqs.map((eq: any) => {
           const q = eq.question;
+
           let correctAnswer: string | string[] = '0';
           const optionsList = [...(q.options || [])].sort((a, b) => a.id.localeCompare(b.id));
           if (q.type === 'mcq') {
@@ -102,7 +122,7 @@ export const StudentController = {
           return {
             id: q.id,
             subjectId: q.subjectId || '',
-            text: q.question || '',
+            text: cleanQuestionText(q.question || ''),
             type: q.type || 'mcq',
             options: optionsList.map(o => o.option),
             correctAnswer,
@@ -202,6 +222,17 @@ export const StudentController = {
 
       if (!exam) {
         return res.status(404).json({ message: 'Exam details not found' });
+      }
+
+      // Check student exam eligibility (3-way match: College, Category, Department)
+      if (
+        (exam.collegeId && exam.collegeId !== student.collegeId) ||
+        (exam.category && exam.category !== student.category) ||
+        (exam.departmentId && exam.departmentId !== student.departmentId)
+      ) {
+        return res.status(403).json({
+          message: 'Access denied: You are not eligible to take or submit this examination.'
+        });
       }
 
       // Check if already attempted
@@ -566,7 +597,7 @@ export const StudentController = {
 
           return {
             id: q.id,
-            text: q.question,
+            text: cleanQuestionText(q.question),
             type: q.type,
             options: sortedOptions.map(o => o.option),
             correctAnswer,
@@ -619,6 +650,21 @@ export const StudentController = {
 
       if (!student) {
         return res.status(403).json({ message: 'Student profile not found' });
+      }
+
+      const exam = await prisma.exam.findUnique({ where: { id: examId } });
+      if (!exam) {
+        return res.status(404).json({ message: 'Exam not found' });
+      }
+
+      if (
+        (exam.collegeId && exam.collegeId !== student.collegeId) ||
+        (exam.category && exam.category !== student.category) ||
+        (exam.departmentId && exam.departmentId !== student.departmentId)
+      ) {
+        return res.status(403).json({
+          message: 'Access denied: You are not eligible for this examination.'
+        });
       }
 
       // Upsert studentExam
@@ -711,6 +757,16 @@ export const StudentController = {
         return res.status(404).json({ message: 'Exam not found' });
       }
 
+      if (
+        (exam.collegeId && exam.collegeId !== student.collegeId) ||
+        (exam.category && exam.category !== student.category) ||
+        (exam.departmentId && exam.departmentId !== student.departmentId)
+      ) {
+        return res.status(403).json({
+          message: 'Access denied: You are not eligible for this examination.'
+        });
+      }
+
       let studentExam = await prisma.studentExam.findUnique({
         where: {
           studentId_examId: {
@@ -789,7 +845,14 @@ export const StudentController = {
         return res.status(403).json({ message: 'Student profile not found' });
       }
 
-      const subjects = await prisma.subject.findMany({});
+      const subjects = await prisma.subject.findMany({
+        where: {
+          NOT: {
+            subjectName: { startsWith: 'Core Fundamentals -' }
+          }
+        },
+        orderBy: { subjectName: 'asc' }
+      });
 
       const formatted = subjects.map(s => ({
         id: s.id,

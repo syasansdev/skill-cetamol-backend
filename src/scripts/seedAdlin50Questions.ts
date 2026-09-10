@@ -308,19 +308,20 @@ export async function seedAdlinData() {
     });
   }
 
-  // 3. Ensure Subject "AML Examination EEC Course" exists
+  // 3. Ensure Subject "Aptitude" exists
   let subject = await prisma.subject.findFirst({
-    where: { subjectName: 'AML Examination EEC Course' }
+    where: { subjectName: 'Aptitude' }
   });
   if (!subject) {
     subject = await prisma.subject.create({
       data: {
-        subjectName: 'AML Examination EEC Course',
+        subjectName: 'Aptitude',
         courseId: course.id,
         semester: 1
       }
     });
   }
+
 
   // 4. Ensure User and Faculty "Adlin Sheeba" exists with email hodaml@stjosephs.ac.in
   let user = await prisma.user.findFirst({
@@ -409,7 +410,7 @@ export async function seedAdlinData() {
 
       await prisma.question.create({
         data: {
-          question: `Q${qItem.num}. ${qItem.question}`,
+          question: qItem.question,
           type: 'mcq',
           difficulty: 'medium',
           marks: 2,

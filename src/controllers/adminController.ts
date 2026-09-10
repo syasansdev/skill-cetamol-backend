@@ -10,8 +10,8 @@ export const AdminController = {
     try {
       const users = await prisma.user.findMany({
         include: {
-          student: true,
-          faculty: true
+          student: { include: { college: true, department: true, course: true } },
+          faculty: { include: { college: true, department: true } }
         },
         orderBy: { createdAt: 'desc' }
       });
@@ -26,12 +26,16 @@ export const AdminController = {
           status: user.status,
           createdAt: user.createdAt,
           // Enrichments
+          collegeId: user.student?.collegeId || user.faculty?.collegeId || undefined,
+          collegeName: user.student?.college?.collegeName || user.faculty?.college?.collegeName || undefined,
+          category: user.student?.category || undefined,
           studentId: user.student?.registerNumber || undefined,
           courseId: user.student?.courseId || undefined,
           departmentId: user.student?.departmentId || user.faculty?.departmentId || undefined,
-          semester: user.student?.year ? user.student.year * 2 : undefined, // simple mapping of sem
+          departmentName: user.student?.department?.departmentName || user.faculty?.department?.departmentName || undefined,
+          semester: user.student?.year ? user.student.year * 2 : undefined,
           facultyId: user.faculty?.employeeId || user.faculty?.id || undefined,
-          subjects: user.faculty ? [] : undefined // Subjects assigned can be added as needed
+          subjects: user.faculty ? [] : undefined
         };
       });
 
@@ -216,9 +220,9 @@ export const AdminController = {
   // 4. Create Faculty / User profile
   createFaculty: async (req: AuthRequest, res: Response, next: NextFunction) => {
     try {
-      const { name, email: rawEmail, password, facultyId, departmentId, collegeId, role, subjects } = req.body;
+      const { name, email: rawEmail, password, facultyId, collegeId, role, departmentId } = req.body;
       const email = rawEmail.toLowerCase();
- 
+
       // Check if email already exists
       const existingUser = await prisma.user.findUnique({ where: { email } });
       if (existingUser) {
@@ -227,67 +231,54 @@ export const AdminController = {
           field: 'email'
         });
       }
- 
-      // Hash admin-specified password
-      const hashedPassword = await bcrypt.hash(password || 'faculty123', 10);
+
       const targetRole = role || 'faculty';
- 
-      // Resolve college name/ID manually or select
-      let resolvedCollegeId = collegeId;
-      if (collegeId) {
-        let col = await prisma.college.findFirst({
+      let resolvedCollegeId: string | null = null;
+      let resolvedDeptId: string | null = null;
+
+      if (targetRole === 'faculty') {
+        if (!collegeId) {
+          return res.status(400).json({
+            message: 'College selection is required to create a faculty account.',
+            field: 'collegeId'
+          });
+        }
+
+        const college = await prisma.college.findFirst({
           where: {
             OR: [
               { id: collegeId },
-              { collegeName: { equals: collegeId } }
+              { collegeName: { equals: collegeId, mode: 'insensitive' } }
             ]
           }
         });
-        if (!col) {
-          col = await prisma.college.create({
-            data: {
-              collegeName: collegeId,
-              code: collegeId.substring(0, 4).toUpperCase()
-            }
+
+        if (!college) {
+          return res.status(400).json({
+            message: 'The selected college does not exist in the database.',
+            field: 'collegeId'
           });
         }
-        resolvedCollegeId = col.id;
+
+        // Check if a faculty account already exists for this college (One Faculty Per College)
+        const existingFaculty = await prisma.faculty.findUnique({
+          where: { collegeId: college.id },
+          include: { user: true }
+        });
+
+        if (existingFaculty) {
+          return res.status(400).json({
+            message: 'A faculty account already exists for this college.',
+            field: 'collegeId',
+            existingFacultyName: existingFaculty.user?.name
+          });
+        }
+
+        resolvedCollegeId = college.id;
       }
 
-      // Resolve department name/ID manually or select
-      let resolvedDeptId = departmentId;
-      if (departmentId) {
-        let dept = await prisma.department.findFirst({
-          where: {
-            OR: [
-              { id: departmentId },
-              { departmentName: { equals: departmentId } }
-            ]
-          }
-        });
-        if (!dept) {
-          dept = await prisma.department.create({
-            data: { 
-              departmentName: departmentId,
-              collegeId: resolvedCollegeId || null
-            }
-          });
-        }
-        resolvedDeptId = dept.id;
-      } else {
-        let dept = await prisma.department.findFirst({
-          where: { departmentName: 'General' }
-        });
-        if (!dept) {
-          dept = await prisma.department.create({
-            data: { 
-              departmentName: 'General',
-              collegeId: resolvedCollegeId || null
-            }
-          });
-        }
-        resolvedDeptId = dept.id;
-      }
+      // Hash password
+      const hashedPassword = await bcrypt.hash(password || 'faculty123', 10);
 
       // Create User
       const user = await prisma.user.create({
@@ -299,7 +290,7 @@ export const AdminController = {
           status: 'active'
         }
       });
- 
+
       let facultyProfileId = undefined;
       let studentProfileId = undefined;
 
@@ -315,37 +306,40 @@ export const AdminController = {
           }
         }
 
-        // Create Faculty Profile
+        // Create Faculty Profile (College-level, not department-level)
         const faculty = await prisma.faculty.create({
           data: {
             userId: user.id,
             employeeId: finalEmployeeId,
-            departmentId: resolvedDeptId,
-            collegeId: resolvedCollegeId || null,
-            designation: 'Lecturer',
+            collegeId: resolvedCollegeId,
+            departmentId: null,
+            designation: 'Faculty Member',
             experience: 1
           }
         });
         facultyProfileId = faculty.employeeId || faculty.id;
- 
+
         // Log details
         await prisma.activityLog.create({
           data: {
             userId: req.user!.id,
-            action: `Provisioned Faculty profile: ${name} (ID: ${facultyId || faculty.id})`
+            action: `Provisioned Faculty profile: ${name} for college ${collegeId}`
           }
         });
       } else if (targetRole === 'student') {
-        // Find or create default Course for department
-        let course = await prisma.course.findFirst({
-          where: { departmentId: resolvedDeptId }
-        });
-        if (!course) {
-          course = await prisma.course.create({
-            data: {
-              courseName: `General Course - ${departmentId}`,
-              departmentId: resolvedDeptId
-            }
+        let resolvedDept = null;
+        if (departmentId) {
+          resolvedDept = await prisma.department.findUnique({ where: { id: departmentId } });
+        }
+        if (!resolvedDept) {
+          resolvedDept = await prisma.department.findFirst();
+        }
+        resolvedDeptId = resolvedDept ? resolvedDept.id : null;
+
+        let course = null;
+        if (resolvedDept) {
+          course = await prisma.course.findFirst({
+            where: { departmentId: resolvedDept.id }
           });
         }
 
@@ -353,8 +347,8 @@ export const AdminController = {
           data: {
             userId: user.id,
             registerNumber: facultyId || `STU-${Date.now()}`,
-            departmentId: resolvedDeptId,
-            courseId: course.id,
+            departmentId: resolvedDept ? resolvedDept.id : '',
+            courseId: course?.id || null,
             year: 1
           }
         });
@@ -401,8 +395,9 @@ export const AdminController = {
         status: user.status,
         facultyId: facultyProfileId,
         studentId: studentProfileId,
+        collegeId: resolvedCollegeId,
         departmentId: resolvedDeptId,
-        subjects: subjects || [],
+        subjects: [],
         emailSent,
         emailError,
         createdAt: user.createdAt
@@ -419,7 +414,13 @@ export const AdminController = {
   // Departments
   getDepartments: async (req: Request, res: Response, next: NextFunction) => {
     try {
+      const { collegeId, category } = req.query as { collegeId?: string; category?: string };
+      const whereClause: any = {};
+      if (collegeId) whereClause.collegeId = collegeId;
+      if (category) whereClause.category = category;
+
       const list = await prisma.department.findMany({
+        where: whereClause,
         include: { college: true, _count: { select: { faculty: true, students: true } } },
         orderBy: { departmentName: 'asc' }
       });
@@ -427,6 +428,7 @@ export const AdminController = {
         id: d.id,
         name: d.departmentName,
         departmentName: d.departmentName,
+        category: d.category,
         code: d.departmentName.split(' ').map(x => x[0]).join('').toUpperCase(),
         collegeId: d.collegeId,
         collegeName: d.college?.collegeName || 'N/A',
@@ -441,13 +443,14 @@ export const AdminController = {
 
   createDepartment: async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const { name, departmentName, collegeId } = req.body;
+      const { name, departmentName, collegeId, category } = req.body;
       const dName = (departmentName || name || '').trim();
       if (!dName) return res.status(400).json({ message: 'Department name is required' });
 
       const dept = await prisma.department.create({
         data: {
           departmentName: dName,
+          category: category || 'Engineering',
           collegeId: collegeId || null
         },
         include: { college: true }
@@ -456,6 +459,7 @@ export const AdminController = {
         id: dept.id,
         name: dept.departmentName,
         departmentName: dept.departmentName,
+        category: dept.category,
         code: dept.departmentName.split(' ').map(x => x[0]).join('').toUpperCase(),
         collegeId: dept.collegeId,
         collegeName: dept.college?.collegeName || 'N/A'
@@ -506,7 +510,14 @@ export const AdminController = {
   // Subjects
   getSubjects: async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const list = await prisma.subject.findMany({ orderBy: { subjectName: 'asc' } });
+      const list = await prisma.subject.findMany({
+        where: {
+          NOT: {
+            subjectName: { startsWith: 'Core Fundamentals -' }
+          }
+        },
+        orderBy: { subjectName: 'asc' }
+      });
       const mapped = list.map(s => ({
         id: s.id,
         name: s.subjectName,
@@ -632,7 +643,7 @@ export const AdminController = {
         studentName: item.student.user.name,
         registerNumber: item.student.registerNumber,
         examName: item.exam.title,
-        course: item.student.course.courseName,
+        course: item.student.course?.courseName || 'N/A',
         department: item.student.department.departmentName,
         warningCount: item.warningCount,
         lockReason: item.lockReason || 'TAB_SWITCH',
@@ -839,8 +850,8 @@ export const AdminController = {
         prisma.user.findMany({
           where,
           include: {
-            student: { include: { department: true, course: true } },
-            faculty: { include: { department: true } }
+            student: { include: { department: true, course: true, college: true } },
+            faculty: { include: { department: true, college: true } }
           },
           orderBy,
           skip,
@@ -857,6 +868,8 @@ export const AdminController = {
         status: u.status,
         photoUrl: u.photoUrl,
         createdAt: u.createdAt,
+        collegeName: u.student?.college?.collegeName || u.faculty?.college?.collegeName || 'N/A',
+        category: u.student?.category || 'N/A',
         departmentName:
           u.student?.department?.departmentName ||
           u.faculty?.department?.departmentName ||
@@ -883,8 +896,8 @@ export const AdminController = {
       const user = await prisma.user.findUnique({
         where: { id },
         include: {
-          student: { include: { department: true, course: true } },
-          faculty: { include: { department: true } },
+          student: { include: { department: true, course: true, college: true } },
+          faculty: { include: { department: true, college: true } },
           activityLogs: {
             orderBy: { timestamp: 'desc' },
             take: 10
@@ -902,6 +915,8 @@ export const AdminController = {
         status: user.status,
         photoUrl: user.photoUrl,
         createdAt: user.createdAt,
+        collegeName: user.student?.college?.collegeName || user.faculty?.college?.collegeName || 'N/A',
+        category: user.student?.category || 'N/A',
         departmentName:
           user.student?.department?.departmentName ||
           user.faculty?.department?.departmentName ||
@@ -1155,10 +1170,28 @@ export const AdminController = {
   getColleges: async (req: AuthRequest, res: Response, next: NextFunction) => {
     try {
       const colleges = await prisma.college.findMany({
-        include: { departments: true, _count: { select: { faculty: true, students: true } } },
+        include: {
+          faculty: { include: { user: true } },
+          departments: true,
+          _count: { select: { students: true, departments: true } }
+        },
         orderBy: { collegeName: 'asc' }
       });
-      return res.status(200).json(colleges);
+
+      const formatted = colleges.map(c => ({
+        id: c.id,
+        collegeName: c.collegeName,
+        code: c.code,
+        createdAt: c.createdAt,
+        faculty: c.faculty,
+        facultyAssigned: c.faculty ? c.faculty.user.name : null,
+        facultyEmail: c.faculty ? c.faculty.user.email : null,
+        studentCount: c._count.students,
+        departmentCount: c._count.departments,
+        departments: c.departments
+      }));
+
+      return res.status(200).json(formatted);
     } catch (error) {
       next(error);
     }

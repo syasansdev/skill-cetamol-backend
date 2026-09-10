@@ -19,7 +19,7 @@ export const AuthController = {
   // 1. User/Student Register
   register: async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const { name, email: rawEmail, password, role, registerNumber, departmentId, collegeId, courseId, yearOfPassing } = req.body;
+      const { name, email: rawEmail, password, role, registerNumber, departmentId, collegeId, category, courseId, yearOfPassing } = req.body;
       const email = rawEmail.toLowerCase();
 
       // Check if email already exists
@@ -28,25 +28,16 @@ export const AuthController = {
         return res.status(400).json({ message: 'Email address already registered' });
       }
 
-      // Hash password
-      const hashedPassword = await bcrypt.hash(password, 10);
-
-      // Create user
-      const user = await prisma.user.create({
-        data: {
-          name,
-          email,
-          password: hashedPassword,
-          role,
-          status: 'active', // Students are active on registration by default
-          photoUrl: undefined
-        }
-      });
-
-      // If student, create student profile
+      // If student, validate student parameters first before user creation
       if (role === 'student') {
+        if (!collegeId) {
+          return res.status(400).json({ message: 'College is required for students' });
+        }
+        if (!category || !['Engineering', 'Arts & Science'].includes(category)) {
+          return res.status(400).json({ message: 'Valid course category (Engineering or Arts & Science) is required' });
+        }
         if (!departmentId) {
-          return res.status(400).json({ message: 'Department is required for students' });
+          return res.status(400).json({ message: 'Department / Course is required for students' });
         }
         if (!registerNumber || !registerNumber.trim()) {
           return res.status(400).json({ message: 'Registration number is required for students' });
@@ -60,23 +51,51 @@ export const AuthController = {
           return res.status(400).json({ message: 'Registration number is already registered' });
         }
 
-        // Verify department exists
-        let dept = await prisma.department.findFirst({
+        // Verify college exists
+        const college = await prisma.college.findFirst({
           where: {
             OR: [
-              { id: departmentId },
-              { departmentName: { equals: departmentId } }
+              { id: collegeId },
+              { collegeName: { equals: collegeId, mode: 'insensitive' } }
             ]
           }
         });
+        if (!college) {
+          return res.status(400).json({ message: 'Selected college does not exist' });
+        }
+
+        // Verify department exists AND belongs to selected College AND selected Category
+        const dept = await prisma.department.findFirst({
+          where: {
+            OR: [
+              { id: departmentId },
+              { departmentName: { equals: departmentId, mode: 'insensitive' } }
+            ],
+            collegeId: college.id,
+            category: category
+          }
+        });
+
         if (!dept) {
-          dept = await prisma.department.create({
-            data: {
-              departmentName: departmentId,
-              collegeId: collegeId || null
-            }
+          return res.status(400).json({ 
+            message: 'Invalid selection: The selected department/course does not belong to the chosen college and category.' 
           });
         }
+
+        // Hash password
+        const hashedPassword = await bcrypt.hash(password, 10);
+
+        // Create user
+        const user = await prisma.user.create({
+          data: {
+            name,
+            email,
+            password: hashedPassword,
+            role,
+            status: 'active',
+            photoUrl: undefined
+          }
+        });
 
         let targetCourseId = courseId;
         if (!targetCourseId) {
@@ -84,7 +103,7 @@ export const AuthController = {
           if (!crs) {
             crs = await prisma.course.create({
               data: {
-                courseName: `B.Tech - ${dept.departmentName}`,
+                courseName: `${dept.departmentName} - ${college.collegeName.substring(0, 15)}`,
                 departmentId: dept.id
               }
             });
@@ -97,7 +116,8 @@ export const AuthController = {
             userId: user.id,
             registerNumber,
             departmentId: dept.id,
-            collegeId: collegeId || dept.collegeId || null,
+            category: category,
+            collegeId: college.id,
             courseId: targetCourseId,
             year: Number(yearOfPassing || 1),
             phone: '',
@@ -113,7 +133,7 @@ export const AuthController = {
             data: {
               userId: admin.id,
               title: 'New Student Registration',
-              message: `New student registration: ${name} (${registerNumber}) is now active.`
+              message: `New student registration: ${name} (${registerNumber}) in ${college.collegeName} [${category} - ${dept.departmentName}] is now active.`
             }
           });
         }
@@ -124,7 +144,34 @@ export const AuthController = {
         } catch (emailErr) {
           console.error('Nodemailer failed:', emailErr);
         }
+
+        // Audit Log
+        await prisma.activityLog.create({
+          data: {
+            userId: user.id,
+            action: `Student registered: ${name} (${college.collegeName} - ${dept.departmentName})`
+          }
+        });
+
+        const { password: _, ...userWithoutPassword } = user;
+        return res.status(201).json({
+          user: userWithoutPassword,
+          message: 'Successfully registered. You can now log in.'
+        });
       }
+
+      // Hash password for other roles
+      const hashedPassword = await bcrypt.hash(password, 10);
+      const user = await prisma.user.create({
+        data: {
+          name,
+          email,
+          password: hashedPassword,
+          role,
+          status: 'active',
+          photoUrl: undefined
+        }
+      });
 
       // Audit Log
       await prisma.activityLog.create({
@@ -159,12 +206,14 @@ export const AuthController = {
         include: {
           student: {
             include: {
+              college: true,
               department: true,
               course: true
             }
           },
           faculty: {
             include: {
+              college: true,
               department: true
             }
           }
@@ -211,6 +260,9 @@ export const AuthController = {
         createdAt: user.createdAt,
         photoUrl: formatPhotoUrl(req, user.photoUrl || user.student?.photoUrl),
         // Enrichments
+        collegeId: user.student?.collegeId || user.faculty?.collegeId || undefined,
+        collegeName: user.student?.college?.collegeName || user.faculty?.college?.collegeName || undefined,
+        category: user.student?.category || undefined,
         studentId: user.student?.registerNumber || undefined,
         courseId: user.student?.courseId || undefined,
         departmentId: user.student?.departmentId || user.faculty?.departmentId || undefined,
@@ -375,12 +427,14 @@ export const AuthController = {
         include: {
           student: {
             include: {
+              college: true,
               department: true,
               course: true
             }
           },
           faculty: {
             include: {
+              college: true,
               department: true
             }
           }
@@ -401,9 +455,14 @@ export const AuthController = {
         createdAt: user.createdAt,
         photoUrl: formatPhotoUrl(req, user.photoUrl || user.student?.photoUrl),
         // Enrichments
+        collegeId: user.student?.collegeId || user.faculty?.collegeId || undefined,
+        collegeName: user.student?.college?.collegeName || user.faculty?.college?.collegeName || undefined,
+        category: user.student?.category || undefined,
         studentId: user.student?.registerNumber || undefined,
         courseId: user.student?.courseId || undefined,
         departmentId: user.student?.departmentId || user.faculty?.departmentId || undefined,
+        department: user.student?.department?.departmentName || user.faculty?.department?.departmentName || undefined,
+        course: user.student?.course?.courseName || undefined,
         semester: user.student ? 4 : undefined,
         subjects: user.faculty ? (await prisma.question.findMany({
           where: { facultyId: user.faculty.id },
@@ -480,12 +539,14 @@ export const AuthController = {
         include: {
           student: {
             include: {
+              college: true,
               department: true,
               course: true
             }
           },
           faculty: {
             include: {
+              college: true,
               department: true
             }
           }
@@ -624,12 +685,14 @@ export const AuthController = {
         include: {
           student: {
             include: {
+              college: true,
               department: true,
               course: true
             }
           },
           faculty: {
             include: {
+              college: true,
               department: true
             }
           }
@@ -654,6 +717,9 @@ export const AuthController = {
         createdAt: updatedUser.createdAt,
         photoUrl: formatPhotoUrl(req, updatedUser.photoUrl || updatedUser.student?.photoUrl),
         // Enrichments
+        collegeId: updatedUser.student?.collegeId || updatedUser.faculty?.collegeId || undefined,
+        collegeName: updatedUser.student?.college?.collegeName || updatedUser.faculty?.college?.collegeName || undefined,
+        category: updatedUser.student?.category || undefined,
         studentId: updatedUser.student?.registerNumber || undefined,
         courseId: updatedUser.student?.courseId || undefined,
         departmentId: updatedUser.student?.departmentId || updatedUser.faculty?.departmentId || undefined,
@@ -680,20 +746,9 @@ export const AuthController = {
   getAcademicMetadata: async (req: Request, res: Response, next: NextFunction) => {
     try {
       const colleges = await prisma.college.findMany({
-        where: {
-          faculty: {
-            some: {}
-          }
-        },
-        include: { departments: true },
         orderBy: { collegeName: 'asc' }
       });
       const departments = await prisma.department.findMany({
-        where: {
-          faculty: {
-            some: {}
-          }
-        },
         include: { college: true },
         orderBy: { departmentName: 'asc' }
       });
