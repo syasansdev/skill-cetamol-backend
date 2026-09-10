@@ -26,7 +26,10 @@ export const StudentController = {
 
       const collegeExams = await prisma.exam.findMany({
         where: {
-          collegeId: student.collegeId
+          OR: [
+            { collegeId: student.collegeId },
+            { collegeId: null }
+          ]
         },
         include: {
           college: true,
@@ -462,6 +465,9 @@ export const StudentController = {
         where: {
           studentId: student.id,
           examId: { in: results.map((r: any) => r.examId) }
+        },
+        include: {
+          studentAnswers: true
         }
       });
 
@@ -492,6 +498,34 @@ export const StudentController = {
           ? se.submittedAt.toISOString()
           : (r.exam?.endDate ? r.exam.endDate.toISOString() : new Date().toISOString());
 
+        let correctCount = 0;
+        let wrongCount = 0;
+        let skippedCount = 0;
+
+        if (se && Array.isArray(se.studentAnswers) && se.studentAnswers.length > 0) {
+          se.studentAnswers.forEach((ans: any) => {
+            const hasAnswer = (ans.selectedOption !== null && ans.selectedOption !== '') ||
+                              (ans.answerText !== null && ans.answerText !== '');
+            if (ans.marksAwarded > 0) {
+              correctCount++;
+            } else if (hasAnswer) {
+              wrongCount++;
+            } else {
+              skippedCount++;
+            }
+          });
+          const totalQ = totalEqs || (r.exam?.questionCount ?? 0);
+          if (totalQ > (correctCount + wrongCount + skippedCount)) {
+            skippedCount += (totalQ - (correctCount + wrongCount + skippedCount));
+          }
+        } else {
+          const marksPerQ = r.exam?.marksPerQuestion || 1;
+          const totalQ = totalEqs > 0 ? totalEqs : (r.exam?.questionCount || 10);
+          correctCount = Math.min(totalQ, Math.max(0, Math.round(rawScore / marksPerQ)));
+          wrongCount = Math.max(0, totalQ - correctCount);
+          skippedCount = 0;
+        }
+
         return {
           id: r.id,
           examId: r.examId,
@@ -505,6 +539,9 @@ export const StudentController = {
           percentage: r.percentage,
           status: r.status,
           timeTaken: timeTakenSeconds,
+          correctCount,
+          wrongCount,
+          skippedCount,
           submittedAt: submissionDate,
           rank: r.rank || 1
         };

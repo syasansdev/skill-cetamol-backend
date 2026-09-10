@@ -208,14 +208,19 @@ export const FacultyController = {
   getExams: async (req: AuthRequest, res: Response, next: NextFunction) => {
     try {
       let whereClause: any = {};
-      if (req.user) {
+      if (req.user && req.user.role !== 'admin') {
         const faculty = await prisma.faculty.findUnique({
           where: { userId: req.user.id }
         });
-        if (faculty?.collegeId) {
-          whereClause.collegeId = faculty.collegeId;
-        } else if (faculty) {
-          whereClause.facultyId = faculty.id;
+        if (faculty) {
+          const orConditions: any[] = [
+            { facultyId: faculty.id },
+            { collegeId: null }
+          ];
+          if (faculty.collegeId) {
+            orConditions.push({ collegeId: faculty.collegeId });
+          }
+          whereClause = { OR: orConditions };
         }
       }
 
@@ -720,9 +725,10 @@ export const FacultyController = {
           exam: { facultyId }
         } : {}),
         include: {
-          student: { include: { user: true, department: true } },
+          student: { include: { user: true, department: true, college: true } },
           exam: {
             include: {
+              college: true,
               subject: true,
               examQuestions: { include: { question: true } }
             }
@@ -735,6 +741,9 @@ export const FacultyController = {
         where: {
           examId: { in: results.map((r: any) => r.examId) },
           studentId: { in: results.map((r: any) => r.studentId) }
+        },
+        include: {
+          studentAnswers: true
         }
       });
 
@@ -765,11 +774,42 @@ export const FacultyController = {
           ? se.submittedAt.toISOString()
           : (r.exam?.endDate ? r.exam.endDate.toISOString() : new Date().toISOString());
 
+        // Calculate correct answers, wrong answers, and skipped questions
+        let correctCount = 0;
+        let wrongCount = 0;
+        let skippedCount = 0;
+
+        if (se && Array.isArray(se.studentAnswers) && se.studentAnswers.length > 0) {
+          se.studentAnswers.forEach((ans: any) => {
+            const hasAnswer = (ans.selectedOption !== null && ans.selectedOption !== '') ||
+                              (ans.answerText !== null && ans.answerText !== '');
+            if (ans.marksAwarded > 0) {
+              correctCount++;
+            } else if (hasAnswer) {
+              wrongCount++;
+            } else {
+              skippedCount++;
+            }
+          });
+          const totalQ = totalEqs || (r.exam?.questionCount ?? 0);
+          if (totalQ > (correctCount + wrongCount + skippedCount)) {
+            skippedCount += (totalQ - (correctCount + wrongCount + skippedCount));
+          }
+        } else {
+          // Fallback if individual studentAnswers rows aren't present
+          const marksPerQ = r.exam?.marksPerQuestion || 1;
+          const totalQ = totalEqs > 0 ? totalEqs : (r.exam?.questionCount || 10);
+          correctCount = Math.min(totalQ, Math.max(0, Math.round(rawScore / marksPerQ)));
+          wrongCount = Math.max(0, totalQ - correctCount);
+          skippedCount = 0;
+        }
+
         return {
           id: r.id,
           examId: r.examId,
           examTitle: r.exam?.title || 'Examination',
           subjectName: r.exam?.subject ? r.exam.subject.subjectName : 'General Evaluation',
+          collegeName: r.student?.college?.collegeName || r.exam?.college?.collegeName || 'N/A',
           studentId: r.student?.user?.id || '',
           studentName: r.student?.user?.name || 'Student',
           studentRollNo: r.student?.registerNumber || '',
@@ -780,6 +820,9 @@ export const FacultyController = {
           percentage: r.percentage,
           status: r.status,
           timeTaken: timeTakenSeconds,
+          correctCount,
+          wrongCount,
+          skippedCount,
           submittedAt: submissionDate
         };
       });
@@ -956,13 +999,25 @@ export const FacultyController = {
       const faculty = await prisma.faculty.findUnique({
         where: { userId: req.user!.id }
       });
-      if (!faculty) return res.status(403).json({ message: 'Faculty not found' });
+      if (!faculty && req.user?.role !== 'admin') return res.status(403).json({ message: 'Faculty not found' });
+
+      let whereCondition: any = {
+        startDate: { gte: new Date() }
+      };
+
+      if (req.user?.role !== 'admin' && faculty) {
+        const orConditions: any[] = [
+          { facultyId: faculty.id },
+          { collegeId: null }
+        ];
+        if (faculty.collegeId) {
+          orConditions.push({ collegeId: faculty.collegeId });
+        }
+        whereCondition.OR = orConditions;
+      }
 
       const exams = await prisma.exam.findMany({
-        where: {
-          facultyId: faculty.id,
-          startDate: { gte: new Date() }
-        },
+        where: whereCondition,
         include: {
           college: true,
           department: true,
