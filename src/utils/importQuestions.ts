@@ -6,46 +6,32 @@ import { randomUUID } from 'crypto';
 
 export async function importGoogleDriveQuestions() {
   try {
-    // 1. Check if Placement Training dept already exists (skip if already set up)
-    const existingDept = await prisma.department.findFirst({
-      where: { departmentName: 'Placement Training' }
-    });
-    
-    if (existingDept) {
-      // Also verify questions exist, not just the department
-      const questionsCount = await prisma.question.count({
-        where: { subject: { course: { departmentId: existingDept.id } } }
-      });
-      if (questionsCount > 0) {
-        console.log(`Placement Training questions already imported (${questionsCount} questions found). Skipping.`);
-        return;
-      }
-    }
-
-    console.log('Placement Training questions not found or empty. Cleaning up old subjects to import fresh...');
-    
-    // Clean up any existing subjects to avoid duplicates or constraint errors
-    await prisma.subject.deleteMany({
-      where: { course: { courseName: 'Aptitude & Practice' } }
-    });
-
-    console.log('Starting Google Drive questions import script...');
-
-    // Resolve my_subdb.sql path
-    let sqlPath = path.join(__dirname, 'my_subdb.sql');
-    if (!fs.existsSync(sqlPath)) {
-      sqlPath = path.join(__dirname, '..', '..', 'src', 'utils', 'my_subdb.sql');
-    }
-    if (!fs.existsSync(sqlPath)) {
-      sqlPath = path.join(__dirname, '..', 'src', 'utils', 'my_subdb.sql');
-    }
-
-    if (!fs.existsSync(sqlPath)) {
-      console.error('SQL dump file my_subdb.sql not found at:', sqlPath);
+    // 1. Check if the question bank is already fully loaded
+    const totalCount = await prisma.question.count();
+    if (totalCount >= 2500) {
+      console.log(`[Import] Question bank already fully populated (${totalCount} questions found). Skipping.`);
       return;
     }
 
-    console.log('Found SQL dump at:', sqlPath);
+    console.log(`[Import] Found ${totalCount} questions. Importing 2,750+ questions from my_subdb.sql...`);
+
+    // Resolve my_subdb.sql path across different environments (local, compiled dist, Docker)
+    const candidatePaths = [
+      path.join(__dirname, 'my_subdb.sql'),
+      path.join(__dirname, '..', 'src', 'utils', 'my_subdb.sql'),
+      path.join(__dirname, '..', '..', 'src', 'utils', 'my_subdb.sql'),
+      path.join(process.cwd(), 'src', 'utils', 'my_subdb.sql'),
+      path.join(process.cwd(), 'dist', 'utils', 'my_subdb.sql'),
+      path.join(process.cwd(), 'my_subdb.sql')
+    ];
+    let sqlPath = candidatePaths.find(p => fs.existsSync(p));
+
+    if (!sqlPath) {
+      console.error('❌ SQL dump file my_subdb.sql not found in candidate paths:', candidatePaths);
+      return;
+    }
+
+    console.log('[Import] Found SQL dump at:', sqlPath);
 
     // 2. Parse categories, passages, and questions from SQL file
     const fileStream = fs.createReadStream(sqlPath);
@@ -159,8 +145,7 @@ export async function importGoogleDriveQuestions() {
     console.log('Setting up single unified Aptitude subject...');
     let unifiedSubject = await prisma.subject.findFirst({
       where: {
-        subjectName: 'Aptitude',
-        courseId: course.id
+        subjectName: 'Aptitude'
       }
     });
     if (!unifiedSubject) {
@@ -173,8 +158,14 @@ export async function importGoogleDriveQuestions() {
       });
     }
 
+    // 5. Query existing questions to avoid duplicate inserts
+    const existingQuestions = await prisma.question.findMany({
+      where: { subjectId: unifiedSubject.id },
+      select: { question: true }
+    });
+    const existingSet = new Set(existingQuestions.map(q => q.question.trim().toLowerCase()));
 
-    // 5. Build questions and options list
+    // 6. Build questions and options list
     console.log('Building question models...');
     const questionsToCreate: any[] = [];
     const optionsToCreate: any[] = [];
@@ -188,6 +179,11 @@ export async function importGoogleDriveQuestions() {
       const questionText = cleanQuestionPrefix(rawQuestionText);
       const facultyId = faculty.id;
       
+      if (!questionText || existingSet.has(questionText.toLowerCase())) {
+        continue;
+      }
+      existingSet.add(questionText.toLowerCase());
+
       const subCat = subCategoryMap.get(subCatId);
       if (!subCat) continue;
 
@@ -242,6 +238,11 @@ export async function importGoogleDriveQuestions() {
       const catDesc = categoryMap.get(subCat.categoryId) || 'General Aptitude';
       const questionText = `[Passage: ${passage.text}]\n\n${rawQuestionText}`;
 
+      if (existingSet.has(questionText.toLowerCase())) {
+        continue;
+      }
+      existingSet.add(questionText.toLowerCase());
+
       questionsToCreate.push({
         id: qId,
         question: questionText,
@@ -279,7 +280,8 @@ export async function importGoogleDriveQuestions() {
     for (let i = 0; i < questionsToCreate.length; i += chunkSize) {
       const chunk = questionsToCreate.slice(i, i + chunkSize);
       await prisma.question.createMany({
-        data: chunk
+        data: chunk,
+        skipDuplicates: true
       });
     }
 
@@ -287,11 +289,13 @@ export async function importGoogleDriveQuestions() {
     for (let i = 0; i < optionsToCreate.length; i += chunkSize) {
       const chunk = optionsToCreate.slice(i, i + chunkSize);
       await prisma.questionOption.createMany({
-        data: chunk
+        data: chunk,
+        skipDuplicates: true
       });
     }
 
-    console.log('🎉 Google Drive questions import complete! Imported successfully.');
+    const finalTotal = await prisma.question.count();
+    console.log(`🎉 Google Drive questions import complete! Total questions now: ${finalTotal}`);
 
   } catch (err) {
     console.error('❌ Error importing Google Drive questions:', err);

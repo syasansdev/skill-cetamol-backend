@@ -6,10 +6,11 @@
   "scripts": {
     "start": "node dist/server.js",
     "dev": "nodemon src/server.ts",
-    "build": "tsc",
+    "build": "tsc && node -e \"const fs=require('fs'); fs.mkdirSync('dist/utils',{recursive:true}); fs.copyFileSync('src/utils/my_subdb.sql','dist/utils/my_subdb.sql');\"",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
-    "prisma:seed": "ts-node prisma/seed.ts"
+    "prisma:seed": "ts-node prisma/seed.ts",
+    "import:questions": "ts-node src/scripts/import_all_questions.ts"
   },
   "dependencies": {
     "@prisma/client": "^5.11.0",
