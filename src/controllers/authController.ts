@@ -4,6 +4,7 @@ import jwt from 'jsonwebtoken';
 import prisma from '../config/db';
 import { emailService } from '../services/emailService';
 import { AuthRequest } from '../middleware/auth';
+import { ENGINEERING_COURSES, ARTS_AND_SCIENCE_COURSES } from '../data/academicPrograms';
 
 const formatPhotoUrl = (req: Request, url?: string | null) => {
   if (!url) return undefined;
@@ -30,9 +31,6 @@ export const AuthController = {
 
       // If student, validate student parameters first before user creation
       if (role === 'student') {
-        if (!collegeId) {
-          return res.status(400).json({ message: 'College is required for students' });
-        }
         if (!category || !['Engineering', 'Arts & Science'].includes(category)) {
           return res.status(400).json({ message: 'Valid course category (Engineering or Arts & Science) is required' });
         }
@@ -52,17 +50,25 @@ export const AuthController = {
           return res.status(400).json({ message: 'Registration number is already registered' });
         }
 
-        // Verify college exists
-        const college = await prisma.college.findFirst({
-          where: {
-            OR: [
-              { id: collegeId },
-              { collegeName: { equals: collegeId, mode: 'insensitive' } }
-            ]
-          }
-        });
+        // Resolve college (or fallback to registered college)
+        let college = null;
+        if (collegeId) {
+          college = await prisma.college.findFirst({
+            where: {
+              OR: [
+                { id: collegeId },
+                { collegeName: { equals: collegeId, mode: 'insensitive' } }
+              ]
+            }
+          });
+        }
         if (!college) {
-          return res.status(400).json({ message: 'Selected college does not exist' });
+          college = await prisma.college.findFirst();
+        }
+        if (!college) {
+          college = await prisma.college.create({
+            data: { collegeName: 'SkillCetamol University', code: 'SCU' }
+          });
         }
 
         // Find or auto-create department for this college based on student's input
@@ -77,26 +83,13 @@ export const AuthController = {
         });
 
         if (!dept) {
-          const globalDept = await prisma.department.findFirst({
-            where: {
-              departmentName: { equals: rawDept, mode: 'insensitive' }
+          dept = await prisma.department.create({
+            data: {
+              departmentName: rawDept,
+              category: category || 'Engineering',
+              collegeId: college.id
             }
           });
-
-          if (globalDept && !globalDept.collegeId) {
-            dept = await prisma.department.update({
-              where: { id: globalDept.id },
-              data: { collegeId: college.id, category: category || globalDept.category }
-            });
-          } else {
-            dept = await prisma.department.create({
-              data: {
-                departmentName: rawDept,
-                category: category || 'Engineering',
-                collegeId: college.id
-              }
-            });
-          }
         }
 
         // Hash password
@@ -782,7 +775,13 @@ export const AuthController = {
         orderBy: { courseName: 'asc' }
       });
 
-      return res.status(200).json({ colleges, departments, courses });
+      return res.status(200).json({
+        colleges,
+        departments,
+        courses,
+        engineeringCourses: ENGINEERING_COURSES,
+        artsAndScienceCourses: ARTS_AND_SCIENCE_COURSES
+      });
     } catch (error) {
       next(error);
     }

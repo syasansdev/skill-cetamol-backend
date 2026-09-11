@@ -33,6 +33,8 @@ router.get('/users', AdminController.getUsers);
 router.post('/users/:id/approve', AdminController.approveStudent);
 router.delete('/users/:id', AdminController.deleteUser);
 router.post('/faculty', validateBody(createFacultySchema), AdminController.createFaculty);
+router.post('/faculty/:id/resend-welcome', AdminController.resendFacultyWelcome);
+router.post('/faculty/:id/reset-password', AdminController.resetUserPassword);
 router.post('/reset-database', AdminController.resetDatabase);
 
 // Subject operations

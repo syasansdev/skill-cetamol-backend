@@ -3,6 +3,23 @@ import transporter from '../config/mail';
 const getSender = () => `"Skill Cetamol Portal" <${process.env.EMAIL_USER || 'syasanscareeranalytics@gmail.com'}>`;
 const getLoginUrl = () => `${(process.env.FRONTEND_URL || 'http://localhost:5173').replace(/\/$/, '')}/login`;
 
+const sendMailWithRetry = async (mailOptions: any, maxRetries: number = 2) => {
+  let lastError: any = null;
+  for (let attempt = 1; attempt <= maxRetries + 1; attempt++) {
+    try {
+      const info = await transporter.sendMail(mailOptions);
+      return info;
+    } catch (err: any) {
+      lastError = err;
+      console.warn(`[EmailService] Attempt ${attempt} failed to send email to ${mailOptions.to}:`, err.message);
+      if (attempt <= maxRetries) {
+        await new Promise(res => setTimeout(res, attempt * 1200));
+      }
+    }
+  }
+  throw lastError;
+};
+
 export const emailService = {
   // 1. Student Registration
   sendStudentRegistration: async (email: string, name: string) => {
@@ -18,7 +35,7 @@ export const emailService = {
         <p style="color: #64748b; font-size: 13px; margin-top: 30px; border-top: 1px solid #e2e8f0; padding-top: 10px;">This is an automated notification. Please do not reply directly to this email.</p>
       </div>
     `;
-    return transporter.sendMail({
+    return sendMailWithRetry({
       from: getSender(),
       to: email,
       subject: 'Skill Cetamol Exam Portal - Registration Successful',
@@ -40,7 +57,7 @@ export const emailService = {
         <p style="color: #64748b; font-size: 13px; margin-top: 30px; border-top: 1px solid #e2e8f0; padding-top: 10px;">Skill Cetamol Evaluation Systems</p>
       </div>
     `;
-    return transporter.sendMail({
+    return sendMailWithRetry({
       from: getSender(),
       to: email,
       subject: 'Skill Cetamol Exam Portal - Student Account Approved',
@@ -161,7 +178,7 @@ export const emailService = {
 </html>
     `;
     try {
-      const info = await transporter.sendMail({
+      const info = await sendMailWithRetry({
         from: getSender(),
         to: email,
         subject: `✅ Skill Cetamol Portal — Your ${roleLabel} Account is Ready`,
@@ -190,7 +207,7 @@ export const emailService = {
         <p style="color: #64748b; font-size: 13px; margin-top: 30px; border-top: 1px solid #e2e8f0; padding-top: 10px;">Skill Cetamol Evaluation Systems</p>
       </div>
     `;
-    return transporter.sendMail({
+    return sendMailWithRetry({
       from: getSender(),
       to: email,
       subject: `Exam Notice: ${examTitle}`,
@@ -209,7 +226,7 @@ export const emailService = {
         <p style="color: #64748b; font-size: 13px; margin-top: 30px; border-top: 1px solid #e2e8f0; padding-top: 10px;">Skill Cetamol Evaluation Systems</p>
       </div>
     `;
-    return transporter.sendMail({
+    return sendMailWithRetry({
       from: getSender(),
       to: email,
       subject: `Proctor Alert: ${examTitle} starting in ${minutesLeft} mins`,
@@ -231,7 +248,7 @@ export const emailService = {
         <p style="color: #64748b; font-size: 13px; margin-top: 30px; border-top: 1px solid #e2e8f0; padding-top: 10px;">If you did not initiate this request, you can safely ignore this email.</p>
       </div>
     `;
-    return transporter.sendMail({
+    return sendMailWithRetry({
       from: getSender(),
       to: email,
       subject: 'Skill Cetamol Exam Portal - Password Reset Link',
@@ -257,7 +274,7 @@ export const emailService = {
         <p style="color: #64748b; font-size: 13px; margin-top: 30px; border-top: 1px solid #e2e8f0; padding-top: 10px;">Skill Cetamol Evaluation Systems</p>
       </div>
     `;
-    return transporter.sendMail({
+    return sendMailWithRetry({
       from: getSender(),
       to: email,
       subject: `Evaluation Scorecard Released: ${examTitle}`,
@@ -279,7 +296,7 @@ export const emailService = {
         <p style="color: #64748b; font-size: 13px; margin-top: 30px; border-top: 1px solid #e2e8f0; padding-top: 10px;">Skill Cetamol Evaluation Systems</p>
       </div>
     `;
-    return transporter.sendMail({
+    return sendMailWithRetry({
       from: getSender(),
       to: email,
       subject: 'Skill Cetamol Exam Portal - Login Magic Code',
@@ -301,7 +318,7 @@ export const emailService = {
         <p style="color: #64748b; font-size: 13px; margin-top: 30px; border-top: 1px solid #e2e8f0; padding-top: 10px;">Skill Cetamol Evaluation Systems</p>
       </div>
     `;
-    return transporter.sendMail({
+    return sendMailWithRetry({
       from: getSender(),
       to: email,
       subject: 'Skill Cetamol Exam Portal - Password Reset Code',

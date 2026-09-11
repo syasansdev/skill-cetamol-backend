@@ -396,7 +396,9 @@ export const AdminController = {
         facultyId: facultyProfileId,
         studentId: studentProfileId,
         collegeId: resolvedCollegeId,
+        collegeName: (await prisma.college.findUnique({ where: { id: resolvedCollegeId || '' } }))?.collegeName,
         departmentId: resolvedDeptId,
+        password: password || 'faculty123',
         subjects: [],
         emailSent,
         emailError,
@@ -962,18 +964,23 @@ export const AdminController = {
     } catch (error) {
       next(error);
     }
-  },
-
-  // Reset user password — generate random, email it
+  },  // Reset user password — supports custom password, role-specific emails
   resetUserPassword: async (req: AuthRequest, res: Response, next: NextFunction) => {
     try {
       const { id } = req.params;
+      const { newPassword: customPassword, password: fallbackPassword } = req.body || {};
 
-      const user = await prisma.user.findUnique({ where: { id } });
+      const user = await prisma.user.findUnique({ 
+        where: { id },
+        include: { faculty: true, student: true }
+      });
       if (!user) return res.status(404).json({ message: 'User not found' });
 
-      // Generate secure random password
-      const newPassword = Math.random().toString(36).slice(-8) + 'A1!';
+      // Generate or use custom password
+      const chosenPassword = customPassword || fallbackPassword;
+      const newPassword = chosenPassword && chosenPassword.trim() 
+        ? chosenPassword.trim() 
+        : (user.role === 'faculty' ? 'faculty123' : Math.random().toString(36).slice(-8) + 'A1!');
       const hashed = await bcrypt.hash(newPassword, 10);
 
       await prisma.user.update({
@@ -989,30 +996,109 @@ export const AdminController = {
       });
 
       // Email the new password
+      let emailSent = false;
+      let emailError: string | null = null;
       try {
-        const transporter = require('../config/mail').default;
-        await transporter.sendMail({
-          from: '"Skill Cetamol Portal" <syasanscareeranalytics@gmail.com>',
-          to: user.email,
-          subject: 'Your Skill Cetamol Password Has Been Reset',
-          html: `
-            <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e2e8f0; border-radius: 6px;">
-              <h2 style="color: #2563eb;">Password Reset by Administrator</h2>
-              <p>Dear ${user.name},</p>
-              <p>Your account password has been reset by the system administrator.</p>
-              <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; padding: 16px; margin: 16px 0;">
-                <strong>New Password:</strong> <code style="font-size: 16px; color: #dc2626;">${newPassword}</code>
+        if (user.role === 'faculty') {
+          await emailService.sendFacultyAccountCreated(
+            user.email,
+            user.name,
+            user.faculty?.employeeId || user.faculty?.id || 'N/A',
+            newPassword,
+            user.role
+          );
+        } else {
+          const transporter = require('../config/mail').default;
+          await transporter.sendMail({
+            from: '"Skill Cetamol Portal" <syasanscareeranalytics@gmail.com>',
+            to: user.email,
+            subject: 'Your Skill Cetamol Password Has Been Reset',
+            html: `
+              <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e2e8f0; border-radius: 6px;">
+                <h2 style="color: #2563eb;">Password Reset by Administrator</h2>
+                <p>Dear ${user.name},</p>
+                <p>Your account password has been reset by the system administrator.</p>
+                <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; padding: 16px; margin: 16px 0;">
+                  <strong>New Password:</strong> <code style="font-size: 16px; color: #dc2626;">${newPassword}</code>
+                </div>
+                <p>Please log in and change your password immediately.</p>
+                <p style="color: #64748b; font-size: 13px; margin-top: 30px; border-top: 1px solid #e2e8f0; padding-top: 10px;">Skill Cetamol Evaluation Systems</p>
               </div>
-              <p>Please log in and change your password immediately.</p>
-              <p style="color: #64748b; font-size: 13px; margin-top: 30px; border-top: 1px solid #e2e8f0; padding-top: 10px;">Skill Cetamol Evaluation Systems</p>
-            </div>
-          `
-        });
-      } catch (mailErr) {
+            `
+          });
+        }
+        emailSent = true;
+      } catch (mailErr: any) {
         console.error('Failed sending password reset email:', mailErr);
+        emailError = mailErr?.message || 'Email delivery failed';
       }
 
-      return res.status(200).json({ message: 'Password reset and emailed successfully' });
+      return res.status(200).json({ 
+        message: emailSent ? 'Password reset and emailed successfully' : 'Password updated, but email could not be delivered',
+        newPassword,
+        emailSent,
+        emailError
+      });
+    } catch (error) {
+      next(error);
+    }
+  },
+
+  // Resend welcome email with credentials for faculty
+  resendFacultyWelcome: async (req: AuthRequest, res: Response, next: NextFunction) => {
+    try {
+      const { id } = req.params;
+      const { password } = req.body || {};
+
+      const user = await prisma.user.findUnique({
+        where: { id },
+        include: {
+          faculty: { include: { college: true } }
+        }
+      });
+
+      if (!user) return res.status(404).json({ message: 'User not found' });
+
+      const finalPassword = password && password.trim() ? password.trim() : 'faculty123';
+      const hashed = await bcrypt.hash(finalPassword, 10);
+
+      await prisma.user.update({
+        where: { id },
+        data: { password: hashed }
+      });
+
+      let emailSent = false;
+      let emailError: string | null = null;
+
+      try {
+        await emailService.sendFacultyAccountCreated(
+          user.email,
+          user.name,
+          user.faculty?.employeeId || user.faculty?.id || 'N/A',
+          finalPassword,
+          user.role
+        );
+        emailSent = true;
+      } catch (err: any) {
+        console.error('Resend welcome email error:', err);
+        emailError = err?.message || 'Failed to deliver welcome email';
+      }
+
+      await prisma.activityLog.create({
+        data: {
+          userId: req.user!.id,
+          action: `Resent welcome email for faculty: ${user.name} (${user.email})`
+        }
+      });
+
+      return res.status(200).json({
+        message: emailSent 
+          ? `Welcome email sent successfully to ${user.email}.` 
+          : `Credentials updated, but email delivery failed: ${emailError}. You can share the password manually.`,
+        emailSent,
+        emailError,
+        password: finalPassword
+      });
     } catch (error) {
       next(error);
     }
