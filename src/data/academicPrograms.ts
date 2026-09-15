@@ -645,3 +645,83 @@ export function getProgramsByCategory(category: 'Engineering' | 'Arts & Science'
   }
   return [];
 }
+
+/**
+ * Filter out test/dummy colleges that should never appear in the application
+ */
+export function filterValidColleges<T extends { collegeName?: string; name?: string }>(colleges: T[]): T[] {
+  return colleges.filter(c => {
+    const name = (c.collegeName || c.name || '').trim();
+    if (!name) return false;
+    // Blacklist dummy / demo / test colleges
+    if (/demo\s*clg/i.test(name)) return false;
+    if (/^jeya\s*univ/i.test(name)) return false;
+    if (/^test\b/i.test(name)) return false;
+    return true;
+  });
+}
+
+/**
+ * Determines whether a college offers Engineering programs.
+ * Universities offer both Engineering and Arts & Science programs.
+ */
+export function isEngineeringCollege(collegeName: string): boolean {
+  const lower = (collegeName || '').toLowerCase();
+  if (lower.includes('university') || lower.includes('univ')) return true;
+  if (
+    lower.includes('engineering') ||
+    lower.includes('technology') ||
+    lower.includes('tech') ||
+    lower.includes('eng') ||
+    lower.includes('st.joseph') ||
+    lower.includes('st. joseph') ||
+    lower.includes('iit') ||
+    lower.includes('nit')
+  ) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Determines whether a college offers Arts & Science / Management / Business programs.
+ * Universities offer both Engineering and Arts & Science programs.
+ */
+export function isArtsCollege(collegeName: string): boolean {
+  const lower = (collegeName || '').toLowerCase();
+  if (lower.includes('university') || lower.includes('univ')) return true;
+  if (
+    lower.includes('arts') ||
+    lower.includes('science') ||
+    lower.includes('business') ||
+    lower.includes('b school') ||
+    lower.includes('b-school') ||
+    lower.includes('management') ||
+    lower.includes('social work') ||
+    lower.includes('vaishnav') ||
+    lower.includes('women') ||
+    lower.includes('commerce')
+  ) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Filters a list of colleges based on the selected academic stream / category.
+ */
+export function getCollegesByCategory<T extends { collegeName?: string; name?: string }>(
+  colleges: T[],
+  category: 'Engineering' | 'Arts & Science' | string
+): T[] {
+  const validColleges = filterValidColleges(colleges);
+  if (!category) return validColleges;
+  if (category === 'Engineering') {
+    return validColleges.filter(c => isEngineeringCollege(c.collegeName || c.name || ''));
+  }
+  if (category === 'Arts & Science') {
+    return validColleges.filter(c => isArtsCollege(c.collegeName || c.name || ''));
+  }
+  return validColleges;
+}
+

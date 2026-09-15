@@ -1256,6 +1256,13 @@ export const AdminController = {
   getColleges: async (req: AuthRequest, res: Response, next: NextFunction) => {
     try {
       const colleges = await prisma.college.findMany({
+        where: {
+          NOT: [
+            { collegeName: { contains: 'Demo Clg', mode: 'insensitive' } },
+            { collegeName: { startsWith: 'Jeya Univ', mode: 'insensitive' } },
+            { collegeName: { startsWith: 'Test', mode: 'insensitive' } }
+          ]
+        },
         include: {
           faculty: { include: { user: true } },
           departments: true,

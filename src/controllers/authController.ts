@@ -765,6 +765,13 @@ export const AuthController = {
   getAcademicMetadata: async (req: Request, res: Response, next: NextFunction) => {
     try {
       const colleges = await prisma.college.findMany({
+        where: {
+          NOT: [
+            { collegeName: { contains: 'Demo Clg', mode: 'insensitive' } },
+            { collegeName: { startsWith: 'Jeya Univ', mode: 'insensitive' } },
+            { collegeName: { startsWith: 'Test', mode: 'insensitive' } }
+          ]
+        },
         orderBy: { collegeName: 'asc' }
       });
       const departments = await prisma.department.findMany({
