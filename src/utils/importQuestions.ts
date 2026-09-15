@@ -18,11 +18,16 @@ export async function importGoogleDriveQuestions() {
     // Resolve my_subdb.sql path across different environments (local, compiled dist, Docker)
     const candidatePaths = [
       path.join(__dirname, 'my_subdb.sql'),
+      path.join(__dirname, 'utils', 'my_subdb.sql'),
+      path.join(__dirname, '..', 'utils', 'my_subdb.sql'),
       path.join(__dirname, '..', 'src', 'utils', 'my_subdb.sql'),
       path.join(__dirname, '..', '..', 'src', 'utils', 'my_subdb.sql'),
+      path.join(__dirname, '..', 'my_subdb.sql'),
+      path.join(process.cwd(), 'my_subdb.sql'),
       path.join(process.cwd(), 'src', 'utils', 'my_subdb.sql'),
       path.join(process.cwd(), 'dist', 'utils', 'my_subdb.sql'),
-      path.join(process.cwd(), 'my_subdb.sql')
+      path.join(process.cwd(), 'backend', 'my_subdb.sql'),
+      path.join(process.cwd(), 'backend', 'src', 'utils', 'my_subdb.sql')
     ];
     let sqlPath = candidatePaths.find(p => fs.existsSync(p));
 

@@ -116,12 +116,13 @@ app.use(cors({
   credentials: true
 }));
 
-// Request Rate Limiter (prevent brute force)
+// Request Rate Limiter (prevent brute force, skip admin management)
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 2000, // limit each IP to 2000 requests per windowMs
+  max: 5000, // higher limit
   standardHeaders: true,
   legacyHeaders: false,
+  skip: (req) => req.path.startsWith('/admin') || req.path.startsWith('/diagnostics'),
   message: { message: 'Too many requests from this IP, please try again after 15 minutes' }
 });
 app.use('/api/', limiter);
