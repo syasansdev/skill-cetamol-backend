@@ -47,6 +47,7 @@ router.put('/revoke-exam/:id', AdminController.revokeExam);
 // Global Search & User Management
 router.get('/search-users', AdminController.searchUsers);
 router.get('/user/:id', AdminController.getUserById);
+router.get('/users/:id', AdminController.getUserById);
 router.put('/user/:id/status', AdminController.updateUserStatus);
 router.post('/user/:id/reset-password', AdminController.resetUserPassword);
 

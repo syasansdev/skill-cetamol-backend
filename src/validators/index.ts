@@ -20,6 +20,9 @@ export const registerSchema = z.object({
   courseId: z.string().optional(),
   yearOfPassing: z.number().or(z.string()).optional(),
   batch: z.number().or(z.string()).optional(),
+  year: z.number().or(z.string()).optional(),
+  startYear: z.number().or(z.string()).optional(),
+  endYear: z.number().or(z.string()).optional(),
   photoUrl: z.string().optional()
 });
 
@@ -56,6 +59,13 @@ export const createExamSchema = z.object({
   startTime: z.string().or(z.date()),
   endTime: z.string().or(z.date()),
   questions: z.array(z.any()), // Questions selected array
+  questionCount: z.number().optional(),
+  negativeMarking: z.boolean().optional(),
+  marksPerQuestion: z.number().optional(),
+  negativeMarks: z.number().optional(),
+  paperName: z.string().optional(),
+  targetYears: z.array(z.string().or(z.number())).or(z.string()).optional(),
+  targetYear: z.number().or(z.string()).optional().nullable(),
   status: z.enum(['draft', 'scheduled', 'active', 'completed']).optional()
 });
 

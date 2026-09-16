@@ -314,6 +314,11 @@ export const FacultyController = {
           displaySubjectName = `AML Examination EEC Course (${e.subjectId ? e.subjectId.substring(0,5).toUpperCase() : 'EEC'})`;
         }
 
+        const yearMatch = e.description?.match(/<!-- TARGET_YEARS:(.*?) -->/);
+        const allowedYears = e.targetYears 
+          ? e.targetYears.split(',').map((s: string) => s.trim()).filter(Boolean)
+          : (yearMatch && yearMatch[1] ? yearMatch[1].split(',').map((s: string) => s.trim()).filter(Boolean) : ['all']);
+
         return {
           id: e.id,
           title: e.title,
@@ -333,6 +338,8 @@ export const FacultyController = {
           createdByName: e.faculty?.user?.name || 'Faculty',
           status: dynamicStatus,
           questionCount: e.questionCount,
+          targetYears: allowedYears,
+          targetYear: e.targetYear || (allowedYears.length === 1 && allowedYears[0] !== 'all' ? Number(allowedYears[0]) : null),
           negativeMarking: e.negativeMarking,
           marksPerQuestion: e.marksPerQuestion,
           negativeMarks: e.negativeMarks,
@@ -352,7 +359,7 @@ export const FacultyController = {
       const {
         title, description, subjectId, duration, startTime, endTime, questions,
         questionCount, negativeMarking, marksPerQuestion, negativeMarks,
-        category, departmentId
+        category, departmentId, targetYears, targetYear
       } = req.body;
 
       const faculty = await prisma.faculty.findUnique({
@@ -410,11 +417,10 @@ export const FacultyController = {
         resolvedCategory = primaryDept?.category || 'All';
       }
 
-      const questionIds = questions.map((q: any) => q.id);
-      const parsedQuestionCount = Math.min(
-        questionCount ? Number(questionCount) : questionIds.length,
-        questionIds.length || 10
-      );
+      const questionIds = (questions || []).map((q: any) => typeof q === 'string' ? q : q.id);
+      const parsedQuestionCount = questionCount !== undefined && Number(questionCount) > 0
+        ? Math.min(Number(questionCount), questionIds.length > 0 ? questionIds.length : Number(questionCount))
+        : (questionIds.length > 0 ? questionIds.length : 10);
       const parsedMarksPerQuestion = marksPerQuestion !== undefined ? Number(marksPerQuestion) : 1;
       const parsedNegativeMarks = negativeMarks !== undefined ? Number(negativeMarks) : 0;
       const parsedNegativeMarking = Boolean(negativeMarking);
@@ -465,6 +471,24 @@ export const FacultyController = {
         finalDescription += `\n<!-- TARGET_DEPTS:all -->`;
       }
 
+      // Handle Target Years (1 to 4)
+      let resolvedTargetYears = 'all';
+      if (Array.isArray(targetYears) && targetYears.length > 0) {
+        resolvedTargetYears = targetYears.map(String).join(',');
+      } else if (typeof targetYears === 'string' && targetYears.trim()) {
+        resolvedTargetYears = targetYears.trim();
+      } else if (targetYear !== undefined && targetYear !== null && targetYear !== '') {
+        resolvedTargetYears = String(targetYear);
+      }
+
+      if (resolvedTargetYears && resolvedTargetYears !== 'all') {
+        finalDescription += `\n<!-- TARGET_YEARS:${resolvedTargetYears} -->`;
+      } else {
+        finalDescription += `\n<!-- TARGET_YEARS:all -->`;
+      }
+
+      const parsedTargetYear = targetYear ? Number(targetYear) : (resolvedTargetYears !== 'all' && !resolvedTargetYears.includes(',') ? Number(resolvedTargetYears) : null);
+
       // Create Exam
       const exam = await prisma.exam.create({
         data: {
@@ -476,6 +500,8 @@ export const FacultyController = {
           category: resolvedCategory,
           departmentId: primaryDept?.id || null,
           paperName: paperName || null,
+          targetYears: resolvedTargetYears,
+          targetYear: parsedTargetYear,
           duration: Number(duration),
           totalMarks,
           startDate: new Date(startTime),
@@ -484,25 +510,33 @@ export const FacultyController = {
           negativeMarking: parsedNegativeMarking,
           marksPerQuestion: parsedMarksPerQuestion,
           negativeMarks: parsedNegativeMarks,
-          status: 'scheduled' // defaults to scheduled
+          status: 'scheduled'
         }
       });
 
       // Link questions
-      const relationData = questionIds.map((qId: string) => ({
-        examId: exam.id,
-        questionId: qId
-      }));
+      if (questionIds.length > 0) {
+        const relationData = questionIds.map((qId: string) => ({
+          examId: exam.id,
+          questionId: qId
+        }));
+        await prisma.examQuestion.createMany({ data: relationData, skipDuplicates: true });
+      }
 
-      await prisma.examQuestion.createMany({ data: relationData });
-
-      // Notify Active Enrolled Students of this College & Target Department(s) via Email
+      // Notify Active Enrolled Students of this College & Target Department(s) & Year via Email
       const studentWhere: any = {
         collegeId: targetCollegeId,
         user: { status: 'active' }
       };
       if (!isEntireCollege && selectedDeptIds.length > 0) {
         studentWhere.departmentId = { in: selectedDeptIds };
+      }
+      const allowedYearsList = resolvedTargetYears.split(',').map(s => s.trim()).filter(Boolean);
+      if (!allowedYearsList.includes('all')) {
+        const numericYears = allowedYearsList.map(Number).filter(n => !isNaN(n));
+        if (numericYears.length > 0) {
+          studentWhere.year = { in: numericYears };
+        }
       }
 
       const enrolledStudents = await prisma.student.findMany({
@@ -539,6 +573,9 @@ export const FacultyController = {
         startTime: exam.startDate.toISOString(),
         endTime: exam.endDate.toISOString(),
         questions: questions,
+        questionCount: exam.questionCount,
+        targetYears: resolvedTargetYears.split(','),
+        targetYear: exam.targetYear,
         createdBy: req.user!.id,
         status: exam.status,
         createdAt: exam.startDate.toISOString()
@@ -562,7 +599,9 @@ export const FacultyController = {
         marksPerQuestion,
         negativeMarks,
         negativeMarking,
-        questions
+        questions,
+        targetYears,
+        targetYear
       } = req.body;
 
       const exam = await prisma.exam.findUnique({
@@ -634,15 +673,40 @@ export const FacultyController = {
         }
       }
 
+      let updatedDescription = description !== undefined ? description : exam.description;
+      let resolvedTargetYears = exam.targetYears || 'all';
+      if (targetYears !== undefined || targetYear !== undefined) {
+        if (Array.isArray(targetYears) && targetYears.length > 0) {
+          resolvedTargetYears = targetYears.map(String).join(',');
+        } else if (typeof targetYears === 'string' && targetYears.trim()) {
+          resolvedTargetYears = targetYears.trim();
+        } else if (targetYear !== undefined && targetYear !== null && targetYear !== '') {
+          resolvedTargetYears = String(targetYear);
+        }
+
+        updatedDescription = updatedDescription.replace(/\n?<!-- TARGET_YEARS:(.*?) -->/g, '');
+        if (resolvedTargetYears && resolvedTargetYears !== 'all') {
+          updatedDescription += `\n<!-- TARGET_YEARS:${resolvedTargetYears} -->`;
+        } else {
+          updatedDescription += `\n<!-- TARGET_YEARS:all -->`;
+        }
+      }
+
+      const parsedTargetYear = targetYear !== undefined
+        ? (targetYear ? Number(targetYear) : null)
+        : (resolvedTargetYears !== 'all' && !resolvedTargetYears.includes(',') ? Number(resolvedTargetYears) : exam.targetYear);
+
       const updated = await prisma.exam.update({
         where: { id },
         data: {
           title: title !== undefined ? title : exam.title,
-          description: description !== undefined ? description : exam.description,
+          description: updatedDescription,
           duration: duration !== undefined ? Number(duration) : exam.duration,
           startDate: startTime !== undefined ? new Date(startTime) : exam.startDate,
           endDate: endTime !== undefined ? new Date(endTime) : exam.endDate,
           questionCount: parsedQCount,
+          targetYears: resolvedTargetYears,
+          targetYear: parsedTargetYear,
           marksPerQuestion: parsedMarksPerQ,
           negativeMarks: negativeMarks !== undefined ? Number(negativeMarks) : exam.negativeMarks,
           negativeMarking: negativeMarking !== undefined ? Boolean(negativeMarking) : exam.negativeMarking,
@@ -662,6 +726,8 @@ export const FacultyController = {
         subjectName: updated.subject?.subjectName || 'Aptitude',
         duration: updated.duration,
         questionCount: updated.questionCount,
+        targetYears: resolvedTargetYears.split(','),
+        targetYear: updated.targetYear,
         startTime: updated.startDate.toISOString(),
         endTime: updated.endDate.toISOString(),
         totalMarks: updated.totalMarks,
@@ -1031,24 +1097,33 @@ export const FacultyController = {
         orderBy: { startDate: 'asc' }
       });
 
-      const formatted = exams.map(e => ({
-        id: e.id,
-        title: e.title,
-        description: e.description,
-        subjectId: e.subjectId,
-        subjectName: e.subject?.subjectName || 'Evaluation',
-        courseName: e.subject?.course?.courseName || 'N/A',
-        departmentName: e.department?.departmentName || e.subject?.course?.department?.departmentName || 'N/A',
-        collegeName: e.college?.collegeName || 'N/A',
-        category: e.category,
-        semester: e.subject?.semester || 1,
-        duration: e.duration,
-        startTime: e.startDate.toISOString(),
-        endTime: e.endDate.toISOString(),
-        totalMarks: e.totalMarks,
-        questionCount: e.examQuestions.length,
-        status: e.status
-      }));
+      const formatted = exams.map(e => {
+        const yearMatch = e.description?.match(/<!-- TARGET_YEARS:(.*?) -->/);
+        const allowedYears = e.targetYears 
+          ? e.targetYears.split(',').map((s: string) => s.trim()).filter(Boolean)
+          : (yearMatch && yearMatch[1] ? yearMatch[1].split(',').map((s: string) => s.trim()).filter(Boolean) : ['all']);
+
+        return {
+          id: e.id,
+          title: e.title,
+          description: e.description,
+          subjectId: e.subjectId,
+          subjectName: e.subject?.subjectName || 'Evaluation',
+          courseName: e.subject?.course?.courseName || 'N/A',
+          departmentName: e.department?.departmentName || e.subject?.course?.department?.departmentName || 'N/A',
+          collegeName: e.college?.collegeName || 'N/A',
+          category: e.category,
+          semester: e.subject?.semester || 1,
+          duration: e.duration,
+          startTime: e.startDate.toISOString(),
+          endTime: e.endDate.toISOString(),
+          totalMarks: e.totalMarks,
+          questionCount: e.questionCount || e.examQuestions.length,
+          targetYears: allowedYears,
+          targetYear: e.targetYear || (allowedYears.length === 1 && allowedYears[0] !== 'all' ? Number(allowedYears[0]) : null),
+          status: e.status
+        };
+      });
 
       return res.status(200).json(formatted);
     } catch (error) {

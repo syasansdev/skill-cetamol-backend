@@ -45,6 +45,7 @@ model Student {
   courseId       String?
   collegeId      String?
   year           Int
+  batch          String?
   phone          String?
   address        String?
   photoUrl       String?
@@ -148,6 +149,8 @@ model Exam {
   collegeId        String?
   category         String?
   paperName        String?
+  targetYears      String?        @default("all")
+  targetYear       Int?
   duration         Int
   totalMarks       Int
   startDate        DateTime

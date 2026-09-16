@@ -8,6 +8,26 @@ function cleanQuestionText(text: string): string {
   return text.replace(/^(?:q(?:uestion)?\s*\d+[\s.:)\-–—]+|\d+\s*[\.\)]\s+)/i, '').trim();
 }
 
+// Helper function for deterministic shuffle based on seed
+function pseudoRandomShuffle<T>(array: T[], seedStr: string): T[] {
+  const result = [...array];
+  let seed = 0;
+  for (let i = 0; i < seedStr.length; i++) {
+    seed = (seed << 5) - seed + seedStr.charCodeAt(i);
+    seed |= 0;
+  }
+  seed = Math.abs(seed);
+  let m = result.length, t, i;
+  while (m) {
+    seed = (seed * 9301 + 49297) % 233280;
+    i = Math.floor((seed / 233280) * m--);
+    t = result[m];
+    result[m] = result[i];
+    result[i] = t;
+  }
+  return result;
+}
+
 export const StudentController = {
   // 1. Get Exams for Student Dashboard
   getExams: async (req: AuthRequest, res: Response, next: NextFunction) => {
@@ -45,22 +65,49 @@ export const StudentController = {
         orderBy: { startDate: 'desc' }
       });
 
+      // Determine student academic year (1..4)
+      const currentYear = new Date().getFullYear();
+      let studentAcademicYear = 1;
+      if (student.year) {
+        if (student.year <= 4) {
+          studentAcademicYear = student.year;
+        } else {
+          studentAcademicYear = Math.min(4, Math.max(1, 4 - (student.year - currentYear)));
+        }
+      }
+
       const allExams = collegeExams.filter(exam => {
         // 1. Department check via TARGET_DEPTS metadata tag
         const deptMatch = exam.description?.match(/<!-- TARGET_DEPTS:(.*?) -->/);
+        let deptAllowed = false;
         if (deptMatch && deptMatch[1]) {
           const allowedIds = deptMatch[1].split(',').map(s => s.trim()).filter(Boolean);
-          if (allowedIds.includes('all')) return true;
-          return student.departmentId ? allowedIds.includes(student.departmentId) : false;
+          if (allowedIds.includes('all')) {
+            deptAllowed = true;
+          } else {
+            deptAllowed = student.departmentId ? allowedIds.includes(student.departmentId) : false;
+          }
+        } else if (!exam.departmentId || exam.departmentId === 'all') {
+          deptAllowed = true;
+        } else if (exam.departmentId === student.departmentId) {
+          deptAllowed = true;
         }
 
-        // 2. If departmentId is null or 'all', visible to all departments in the college
-        if (!exam.departmentId || exam.departmentId === 'all') return true;
+        if (!deptAllowed) return false;
 
-        // 3. Direct single department match
-        if (exam.departmentId === student.departmentId) return true;
+        // 2. Year check via TARGET_YEARS metadata tag or targetYears field
+        const yearMatch = exam.description?.match(/<!-- TARGET_YEARS:(.*?) -->/);
+        const allowedYears = exam.targetYears
+          ? exam.targetYears.split(',').map((s: string) => s.trim()).filter(Boolean)
+          : (yearMatch && yearMatch[1] ? yearMatch[1].split(',').map((s: string) => s.trim()).filter(Boolean) : ['all']);
 
-        return false;
+        if (!allowedYears.includes('all')) {
+          if (!allowedYears.includes(String(studentAcademicYear))) {
+            return false;
+          }
+        }
+
+        return true;
       });
 
       const results = await prisma.result.findMany({
@@ -75,25 +122,6 @@ export const StudentController = {
       const allAnswers = await prisma.studentAnswer.findMany({
         where: { studentExamId: { in: studentExamIds } }
       });
-
-      // Helper function for deterministic shuffle based on seed
-      function pseudoRandomShuffle<T>(array: T[], seedStr: string): T[] {
-        const result = [...array];
-        let seed = 0;
-        for (let i = 0; i < seedStr.length; i++) {
-          seed = (seed << 5) - seed + seedStr.charCodeAt(i);
-          seed |= 0;
-        }
-        let m = result.length, t, i;
-        while (m) {
-          seed = (seed * 9301 + 49297) % 233280;
-          i = Math.floor((seed / 233280) * m--);
-          t = result[m];
-          result[m] = result[i];
-          result[i] = t;
-        }
-        return result;
-      }
 
       // Format exams mapping them to frontend structure
       const formatted = allExams.map(exam => {
@@ -243,17 +271,6 @@ export const StudentController = {
         return res.status(404).json({ message: 'Exam details not found' });
       }
 
-      // Check student exam eligibility (3-way match: College, Category, Department)
-      if (
-        (exam.collegeId && exam.collegeId !== student.collegeId) ||
-        (exam.category && exam.category !== student.category) ||
-        (exam.departmentId && exam.departmentId !== student.departmentId)
-      ) {
-        return res.status(403).json({
-          message: 'Access denied: You are not eligible to take or submit this examination.'
-        });
-      }
-
       // Check if already attempted
       const existingAttempt = await prisma.studentExam.findUnique({
         where: {
@@ -263,14 +280,10 @@ export const StudentController = {
           }
         }
       });
-      if (existingAttempt && existingAttempt.status === 'submitted') {
-        return res.status(400).json({ message: 'Exam session already submitted and graded' });
-      }
 
-      let score = 0;
-      let correctCount = 0;
-      let wrongCount = 0;
-      let skippedCount = 0;
+      const submittedAnswers = answers || {};
+      const marksPerQ = exam.marksPerQuestion || 1;
+      const negMarks = exam.negativeMarking ? (exam.negativeMarks || 0) : 0;
 
       // 1. Create or update StudentExam log
       let studentExam = existingAttempt;
@@ -285,16 +298,24 @@ export const StudentController = {
         });
       }
 
-      const marksPerQ = exam.marksPerQuestion || 1;
-      const negMarks = exam.negativeMarking ? (exam.negativeMarks || 0) : 0;
+      // Deterministic question subset for this student attempt (MUST MATCH getExams)
+      const seedStr = `${student.id}-${exam.id}`;
+      const shuffledEqs = pseudoRandomShuffle(exam.examQuestions || [], seedStr);
+      const validEqs = shuffledEqs.filter((eq: any) => eq && eq.question);
+      const countLimit = exam.questionCount && exam.questionCount > 0
+        ? Math.min(exam.questionCount, validEqs.length)
+        : validEqs.length;
+      const assignedEqs = validEqs.slice(0, countLimit);
 
-      // 2. Grade each question present in submission/exam pool
+      let score = 0;
+      let correctCount = 0;
+      let wrongCount = 0;
+      let skippedCount = 0;
       const answerInserts = [];
 
-      for (const eq of exam.examQuestions) {
-        if (!eq || !eq.question) continue;
+      for (const eq of assignedEqs) {
         const q = eq.question;
-        const studentAns = answers[q.id];
+        const studentAns = submittedAnswers[q.id];
 
         let isCorrect = false;
         let selectedOption = null;
@@ -360,7 +381,9 @@ export const StudentController = {
       });
 
       // Save StudentAnswers details
-      await prisma.studentAnswer.createMany({ data: answerInserts });
+      if (answerInserts.length > 0) {
+        await prisma.studentAnswer.createMany({ data: answerInserts });
+      }
 
       // Clip final score at 0
       const finalScore = Math.max(0, score);
@@ -372,7 +395,7 @@ export const StudentController = {
       });
 
       // Calculate total exam points accurately based on evaluated questions
-      const evaluatedQuestionCount = exam.examQuestions.filter(eq => eq && eq.question).length;
+      const evaluatedQuestionCount = assignedEqs.length;
       const totalPoints = evaluatedQuestionCount > 0
         ? Math.round(evaluatedQuestionCount * marksPerQ)
         : (exam.totalMarks || 10);
@@ -380,9 +403,20 @@ export const StudentController = {
       const percentage = Math.max(0, Math.round((finalScore / totalPoints) * 100));
       const status = percentage >= 40 ? 'pass' : 'fail';
 
-      // 3. Create/Save Result record
-      const result = await prisma.result.create({
-        data: {
+      // 3. Upsert Result record (safe against duplicate submissions)
+      const result = await prisma.result.upsert({
+        where: {
+          studentId_examId: {
+            studentId: student.id,
+            examId: exam.id
+          }
+        },
+        update: {
+          percentage,
+          status,
+          grade: percentage >= 90 ? 'A+' : percentage >= 80 ? 'A' : percentage >= 60 ? 'B' : percentage >= 40 ? 'C' : 'F'
+        },
+        create: {
           studentId: student.id,
           examId: exam.id,
           percentage,
@@ -392,17 +426,20 @@ export const StudentController = {
       });
 
       // Calculate Rank for this exam attempt
-      const allExamResults = await prisma.result.findMany({
-        where: { examId: exam.id },
-        orderBy: [{ percentage: 'desc' }]
-      });
-
-      // Find Rank
-      const rankIdx = allExamResults.findIndex(r => r.id === result.id) + 1;
-      await prisma.result.update({
-        where: { id: result.id },
-        data: { rank: rankIdx }
-      });
+      let rankIdx = 1;
+      try {
+        const allExamResults = await prisma.result.findMany({
+          where: { examId: exam.id },
+          orderBy: [{ percentage: 'desc' }]
+        });
+        rankIdx = allExamResults.findIndex(r => r.id === result.id) + 1 || 1;
+        await prisma.result.update({
+          where: { id: result.id },
+          data: { rank: rankIdx }
+        });
+      } catch (rankErr) {
+        console.warn('Could not compute rank:', rankErr);
+      }
 
       // Dispatch score notification email
       try {
@@ -422,9 +459,10 @@ export const StudentController = {
         studentRollNo: student.registerNumber,
         score,
         totalPoints,
+        totalQuestions: evaluatedQuestionCount,
         percentage,
         status,
-        answers,
+        answers: submittedAnswers,
         timeTaken,
         correctCount,
         wrongCount,
@@ -568,7 +606,10 @@ export const StudentController = {
 
       const result = await prisma.result.findFirst({
         where: {
-          id: resultId,
+          OR: [
+            { id: resultId },
+            { examId: resultId }
+          ],
           studentId: student.id
         },
         include: {
@@ -616,54 +657,69 @@ export const StudentController = {
         });
       }
 
-      const detailedQuestions = result.exam.examQuestions
-        .filter(eq => eq && eq.question)
-        .map(eq => {
-          const q = eq.question;
-          const studentAns = studentExam?.studentAnswers.find(sa => sa.questionId === q.id);
+      // Deterministic question subset for this student attempt (MUST MATCH getExams & submitExam)
+      const seedStr = `${student.id}-${result.exam.id}`;
+      const shuffledEqs = pseudoRandomShuffle(result.exam.examQuestions || [], seedStr);
+      const validEqs = shuffledEqs.filter((eq: any) => eq && eq.question);
+      const countLimit = result.exam.questionCount && result.exam.questionCount > 0
+        ? Math.min(result.exam.questionCount, validEqs.length)
+        : validEqs.length;
+      const assignedEqs = validEqs.slice(0, countLimit);
 
-          let studentOption: string | string[] | null = null;
-          if (studentAns) {
-            if (studentAns.selectedOption !== null) {
-              const parts = studentAns.selectedOption.split(',');
-              studentOption = parts.length > 1 ? parts : parts[0];
-            } else if (studentAns.answerText !== null) {
-              studentOption = studentAns.answerText;
-            }
+      const detailedQuestions = assignedEqs.map((eq: any) => {
+        const q = eq.question;
+        const studentAns = studentExam?.studentAnswers.find(sa => sa.questionId === q.id);
+
+        let studentOption: string | string[] | null = null;
+        if (studentAns) {
+          if (studentAns.selectedOption !== null) {
+            const parts = studentAns.selectedOption.split(',');
+            studentOption = parts.length > 1 ? parts : parts[0];
+          } else if (studentAns.answerText !== null) {
+            studentOption = studentAns.answerText;
           }
+        }
 
-          const sortedOptions = [...(q.options || [])].sort((a, b) => a.id.localeCompare(b.id));
+        const sortedOptions = [...(q.options || [])].sort((a, b) => (a.id || '').localeCompare(b.id || ''));
 
-          let correctAnswer: string | string[] = '0';
-          if (q.type === 'mcq') {
-            const idx = sortedOptions.findIndex(o => o.isCorrect);
-            correctAnswer = idx >= 0 ? String(idx) : '0';
-          } else if (q.type === 'checkbox') {
-            correctAnswer = sortedOptions
-              .map((o, idx) => (o.isCorrect ? String(idx) : null))
-              .filter((idx): idx is string => idx !== null);
-          } else {
-            correctAnswer = '';
-          }
+        let correctAnswer: string | string[] = '0';
+        if (q.type === 'mcq') {
+          const idx = sortedOptions.findIndex(o => o.isCorrect);
+          correctAnswer = idx >= 0 ? String(idx) : '0';
+        } else if (q.type === 'checkbox') {
+          correctAnswer = sortedOptions
+            .map((o, idx) => (o.isCorrect ? String(idx) : null))
+            .filter((idx): idx is string => idx !== null);
+        } else {
+          correctAnswer = '';
+        }
 
-          const isCorrect = studentAns ? studentAns.marksAwarded > 0 : false;
+        const isCorrect = studentAns ? studentAns.marksAwarded > 0 : false;
 
-          return {
-            id: q.id,
-            text: cleanQuestionText(q.question),
-            type: q.type,
-            options: sortedOptions.map(o => o.option),
-            correctAnswer,
-            studentOption,
-            isCorrect,
-            marksAwarded: studentAns ? studentAns.marksAwarded : 0,
-            difficulty: q.difficulty
-          };
-        });
+        return {
+          id: q.id,
+          text: cleanQuestionText(q.question || ''),
+          type: q.type,
+          options: sortedOptions.map(o => o.option),
+          correctAnswer,
+          studentOption,
+          isCorrect,
+          marksAwarded: studentAns ? studentAns.marksAwarded : 0,
+          difficulty: q.difficulty
+        };
+      });
 
       const actualTotalPoints = detailedQuestions.length > 0
         ? Math.round(detailedQuestions.length * (result.exam.marksPerQuestion || 1))
         : (result.exam.totalMarks || 10);
+
+      const computedTimeTaken = (studentExam && studentExam.submittedAt && studentExam.startedAt)
+        ? Math.max(1, Math.round((new Date(studentExam.submittedAt).getTime() - new Date(studentExam.startedAt).getTime()) / 1000))
+        : (result.exam?.duration ? result.exam.duration * 60 : 1200);
+
+      const formattedSubmittedAt = (studentExam && studentExam.submittedAt)
+        ? studentExam.submittedAt.toISOString()
+        : (result.exam?.endDate ? new Date(result.exam.endDate).toISOString() : new Date().toISOString());
 
       return res.status(200).json({
         id: result.id,
@@ -679,11 +735,11 @@ export const StudentController = {
         status: result.status,
         answers: answersMapped,
         detailedQuestions,
-        timeTaken: 1200,
+        timeTaken: computedTimeTaken,
         correctCount,
         wrongCount,
         skippedCount,
-        submittedAt: result.exam.endDate.toISOString(),
+        submittedAt: formattedSubmittedAt,
         rank: result.rank || 1
       });
     } catch (error) {
@@ -696,6 +752,7 @@ export const StudentController = {
     try {
       const examId = req.params.id;
       const { answers, timeRemaining } = req.body;
+      const safeAnswers = answers || {};
 
       const student = await prisma.student.findUnique({
         where: { userId: req.user!.id }
@@ -708,16 +765,6 @@ export const StudentController = {
       const exam = await prisma.exam.findUnique({ where: { id: examId } });
       if (!exam) {
         return res.status(404).json({ message: 'Exam not found' });
-      }
-
-      if (
-        (exam.collegeId && exam.collegeId !== student.collegeId) ||
-        (exam.category && exam.category !== student.category) ||
-        (exam.departmentId && exam.departmentId !== student.departmentId)
-      ) {
-        return res.status(403).json({
-          message: 'Access denied: You are not eligible for this examination.'
-        });
       }
 
       // Upsert studentExam
@@ -747,7 +794,7 @@ export const StudentController = {
         studentExam = await prisma.studentExam.update({
           where: { id: studentExam.id },
           data: {
-            timeRemaining: timeRemaining || studentExam.timeRemaining
+            timeRemaining: timeRemaining !== undefined ? timeRemaining : studentExam.timeRemaining
           }
         });
       }
@@ -757,8 +804,8 @@ export const StudentController = {
         where: { studentExamId: studentExam.id }
       });
 
-      const answerData = Object.keys(answers).map(qId => {
-        const studentAns = answers[qId];
+      const answerData = Object.keys(safeAnswers).map(qId => {
+        const studentAns = safeAnswers[qId];
         let selectedOption = null;
         let answerText = null;
 
@@ -808,16 +855,6 @@ export const StudentController = {
       const exam = await prisma.exam.findUnique({ where: { id: examId } });
       if (!exam) {
         return res.status(404).json({ message: 'Exam not found' });
-      }
-
-      if (
-        (exam.collegeId && exam.collegeId !== student.collegeId) ||
-        (exam.category && exam.category !== student.category) ||
-        (exam.departmentId && exam.departmentId !== student.departmentId)
-      ) {
-        return res.status(403).json({
-          message: 'Access denied: You are not eligible for this examination.'
-        });
       }
 
       let studentExam = await prisma.studentExam.findUnique({

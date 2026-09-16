@@ -80,6 +80,7 @@ async function backfillFacultyEmployeeIds() {
 }
 
 import { seedAdlinData } from './scripts/seedAdlin50Questions';
+import { seedExamsForAllQuestions } from './scripts/seedAllQuestionsExams';
 
 async function initDb() {
   await cleanupSeededData();
@@ -87,6 +88,7 @@ async function initDb() {
   await seedQuantitativeAptitudeQuestions();
   await seedAdlinData();
   await backfillFacultyEmployeeIds();
+  await seedExamsForAllQuestions();
 }
 
 // Configure dotenv
@@ -131,8 +133,8 @@ app.use('/api/', limiter);
 app.use(morgan(process.env.NODE_ENV === 'production' ? 'combined' : 'dev'));
 
 // Body Parsers
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 // Serve static upload placeholders if needed
 app.use('/uploads', express.static(path.join(__dirname, '../uploads')));

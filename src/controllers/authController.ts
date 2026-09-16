@@ -20,7 +20,11 @@ export const AuthController = {
   // 1. User/Student Register
   register: async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const { name, email: rawEmail, password, role, registerNumber, departmentId, departmentName, collegeId, category, courseId, yearOfPassing, batch } = req.body;
+      const {
+        name, email: rawEmail, password, role, registerNumber,
+        departmentId, departmentName, collegeId, category,
+        courseId, yearOfPassing, batch, year, startYear, endYear
+      } = req.body;
       const email = rawEmail.toLowerCase();
 
       // Check if email already exists
@@ -125,10 +129,35 @@ export const AuthController = {
           targetCourseId = crs ? crs.id : undefined;
         }
 
-        const rawBatch = batch || yearOfPassing || new Date().getFullYear();
-        const parsedYear = typeof rawBatch === 'number'
-          ? rawBatch
-          : parseInt(String(rawBatch).replace(/\D/g, '').slice(-4) || '2026', 10) || 2026;
+        const currentYear = new Date().getFullYear();
+        let formattedBatch = '';
+        if (startYear && endYear) {
+          formattedBatch = `${startYear}-${endYear}`;
+        } else if (batch) {
+          formattedBatch = String(batch);
+        } else if (yearOfPassing) {
+          const passYr = parseInt(String(yearOfPassing).replace(/\D/g, '').slice(-4), 10) || currentYear;
+          formattedBatch = `${passYr - 4}-${passYr}`;
+        } else {
+          formattedBatch = `${currentYear - 3}-${currentYear + 1}`;
+        }
+
+        // Academic Year (1 to 4)
+        let academicYear = 1;
+        if (year !== undefined && year !== null && year !== '') {
+          const yNum = Number(year);
+          if (!isNaN(yNum) && yNum >= 1 && yNum <= 4) {
+            academicYear = yNum;
+          } else if (yNum > 100) {
+            // Legacy passed calendar year (e.g. 2026)
+            academicYear = Math.min(4, Math.max(1, 4 - (yNum - currentYear)));
+          }
+        } else if (startYear) {
+          const sYr = Number(startYear);
+          if (!isNaN(sYr) && sYr > 0) {
+            academicYear = Math.min(4, Math.max(1, (currentYear - sYr) + 1));
+          }
+        }
 
         await prisma.student.create({
           data: {
@@ -138,7 +167,8 @@ export const AuthController = {
             category: category,
             collegeId: college.id,
             courseId: targetCourseId,
-            year: parsedYear,
+            year: academicYear,
+            batch: formattedBatch,
             phone: '',
             address: '',
             photoUrl: null

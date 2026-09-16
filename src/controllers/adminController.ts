@@ -16,8 +16,36 @@ export const AdminController = {
         orderBy: { createdAt: 'desc' }
       });
 
+      const currentYear = new Date().getFullYear();
+
       // Map users into unified front-end structure
       const formattedUsers = users.map(user => {
+        let academicYear: number | undefined = undefined;
+        let batchStr: string | undefined = undefined;
+        let calculatedSemester: number | undefined = undefined;
+
+        if (user.student) {
+          const storedYear = user.student.year;
+          batchStr = user.student.batch || undefined;
+
+          if (storedYear) {
+            if (storedYear <= 4) {
+              academicYear = storedYear;
+              if (!batchStr) {
+                const estStart = currentYear - (academicYear - 1);
+                batchStr = `${estStart}-${estStart + 4}`;
+              }
+            } else {
+              // Legacy: stored year was graduating calendar year (e.g. 2026)
+              academicYear = Math.min(4, Math.max(1, 4 - (storedYear - currentYear)));
+              if (!batchStr) {
+                batchStr = `${storedYear - 4}-${storedYear}`;
+              }
+            }
+            calculatedSemester = academicYear * 2;
+          }
+        }
+
         return {
           id: user.id,
           name: user.name,
@@ -33,7 +61,10 @@ export const AdminController = {
           courseId: user.student?.courseId || undefined,
           departmentId: user.student?.departmentId || user.faculty?.departmentId || undefined,
           departmentName: user.student?.department?.departmentName || user.faculty?.department?.departmentName || undefined,
-          semester: user.student?.year ? user.student.year * 2 : undefined,
+          year: academicYear,
+          academicYear,
+          batch: batchStr,
+          semester: calculatedSemester,
           facultyId: user.faculty?.employeeId || user.faculty?.id || undefined,
           subjects: user.faculty ? [] : undefined
         };
@@ -862,23 +893,56 @@ export const AdminController = {
         prisma.user.count({ where })
       ]);
 
-      const formatted = users.map(u => ({
-        id: u.id,
-        name: u.name,
-        email: u.email,
-        role: u.role,
-        status: u.status,
-        photoUrl: u.photoUrl,
-        createdAt: u.createdAt,
-        collegeName: u.student?.college?.collegeName || u.faculty?.college?.collegeName || 'N/A',
-        category: u.student?.category || 'N/A',
-        departmentName:
-          u.student?.department?.departmentName ||
-          u.faculty?.department?.departmentName ||
-          'N/A',
-        courseName: u.student?.course?.courseName || 'N/A',
-        registerNumber: u.student?.registerNumber || u.faculty?.employeeId || u.faculty?.id || 'N/A'
-      }));
+      const currentYear = new Date().getFullYear();
+
+      const formatted = users.map(u => {
+        let academicYear: number | undefined = undefined;
+        let batchStr: string | undefined = undefined;
+        let calculatedSemester: number | undefined = undefined;
+
+        if (u.student) {
+          const storedYear = u.student.year;
+          batchStr = u.student.batch || undefined;
+
+          if (storedYear) {
+            if (storedYear <= 4) {
+              academicYear = storedYear;
+              if (!batchStr) {
+                const estStart = currentYear - (academicYear - 1);
+                batchStr = `${estStart}-${estStart + 4}`;
+              }
+            } else {
+              academicYear = Math.min(4, Math.max(1, 4 - (storedYear - currentYear)));
+              if (!batchStr) {
+                batchStr = `${storedYear - 4}-${storedYear}`;
+              }
+            }
+            calculatedSemester = academicYear * 2;
+          }
+        }
+
+        return {
+          id: u.id,
+          name: u.name,
+          email: u.email,
+          role: u.role,
+          status: u.status,
+          photoUrl: u.photoUrl,
+          createdAt: u.createdAt,
+          collegeName: u.student?.college?.collegeName || u.faculty?.college?.collegeName || 'N/A',
+          category: u.student?.category || 'N/A',
+          departmentName:
+            u.student?.department?.departmentName ||
+            u.faculty?.department?.departmentName ||
+            'N/A',
+          courseName: u.student?.course?.courseName || 'N/A',
+          year: academicYear,
+          academicYear,
+          batch: batchStr,
+          semester: calculatedSemester,
+          registerNumber: u.student?.registerNumber || u.faculty?.employeeId || u.faculty?.id || 'N/A'
+        };
+      });
 
       return res.status(200).json({
         users: formatted,
@@ -907,7 +971,35 @@ export const AdminController = {
         }
       });
 
-      if (!user) return res.status(404).json({ message: 'User not found' });
+      if (!user) {
+        return res.status(404).json({ message: 'User not found' });
+      }
+
+      const currentYear = new Date().getFullYear();
+      let academicYear: number | undefined = undefined;
+      let batchStr: string | undefined = undefined;
+      let calculatedSemester: number | undefined = undefined;
+
+      if (user.student) {
+        const storedYear = user.student.year;
+        batchStr = user.student.batch || undefined;
+
+        if (storedYear) {
+          if (storedYear <= 4) {
+            academicYear = storedYear;
+            if (!batchStr) {
+              const estStart = currentYear - (academicYear - 1);
+              batchStr = `${estStart}-${estStart + 4}`;
+            }
+          } else {
+            academicYear = Math.min(4, Math.max(1, 4 - (storedYear - currentYear)));
+            if (!batchStr) {
+              batchStr = `${storedYear - 4}-${storedYear}`;
+            }
+          }
+          calculatedSemester = academicYear * 2;
+        }
+      }
 
       return res.status(200).json({
         id: user.id,
@@ -924,7 +1016,10 @@ export const AdminController = {
           user.faculty?.department?.departmentName ||
           'N/A',
         courseName: user.student?.course?.courseName || 'N/A',
-        semester: user.student?.year ? user.student.year * 2 : undefined,
+        year: academicYear,
+        academicYear,
+        batch: batchStr,
+        semester: calculatedSemester,
         registerNumber: user.student?.registerNumber || user.faculty?.employeeId || user.faculty?.id,
         phone: user.student?.phone,
         recentActivity: user.activityLogs.map(l => ({
