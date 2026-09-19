@@ -709,8 +709,26 @@ export const AdminController = {
   // Locked Examinations Proctor Monitor operations
   getLockedExams: async (req: AuthRequest, res: Response, next: NextFunction) => {
     try {
+      let whereClause: any = { status: 'LOCKED' };
+      if (req.user && req.user.role === 'faculty') {
+        const faculty = await prisma.faculty.findUnique({
+          where: { userId: req.user.id }
+        });
+        if (faculty) {
+          whereClause = {
+            status: 'LOCKED',
+            OR: [
+              { exam: { facultyId: faculty.id } },
+              { exam: { collegeId: null } },
+              ...(faculty.collegeId ? [{ exam: { collegeId: faculty.collegeId } }] : []),
+              ...(faculty.departmentId ? [{ student: { departmentId: faculty.departmentId } }] : [])
+            ]
+          };
+        }
+      }
+
       const lockedList = await prisma.studentExam.findMany({
-        where: { status: 'LOCKED' },
+        where: whereClause,
         include: {
           student: {
             include: {
@@ -724,7 +742,8 @@ export const AdminController = {
               subject: true
             }
           }
-        }
+        },
+        orderBy: { lockedAt: 'desc' }
       });
 
       const formatted = lockedList.map(item => ({
@@ -733,7 +752,7 @@ export const AdminController = {
         registerNumber: item.student.registerNumber,
         examName: item.exam.title,
         course: item.student.course?.courseName || 'N/A',
-        department: item.student.department.departmentName,
+        department: item.student.department?.departmentName || 'N/A',
         warningCount: item.warningCount,
         lockReason: item.lockReason || 'TAB_SWITCH',
         lockedTime: item.lockedAt ? item.lockedAt.toISOString() : item.startedAt.toISOString(),
@@ -774,12 +793,13 @@ export const AdminController = {
       });
 
       // Keep previous student answers so they can resume their exam with answers intact as expected
+      const actorRole = req.user?.role === 'faculty' ? 'Faculty Proctor' : 'Administrator';
 
       // Create Activity Log
       await prisma.activityLog.create({
         data: {
           userId: req.user!.id,
-          action: `Admin Allowed Re-entry for Student ${studentExam.student.user.name} in Exam: ${studentExam.exam.title}`
+          action: `${actorRole} Allowed Re-entry for Student ${studentExam.student.user.name} in Exam: ${studentExam.exam.title}`
         }
       });
 
@@ -788,7 +808,7 @@ export const AdminController = {
         data: {
           userId: studentExam.student.userId,
           title: 'Exam Re-entry Approved',
-          message: `Your re-entry to the examination "${studentExam.exam.title}" has been authorized. You can resume now.`
+          message: `Your re-entry to the examination "${studentExam.exam.title}" has been authorized by your instructor/proctor. You can resume now.`
         }
       });
 
@@ -803,7 +823,7 @@ export const AdminController = {
             <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e2e8f0; border-radius: 6px;">
               <h2 style="color: #16a34a; border-bottom: 1px solid #e2e8f0; padding-bottom: 10px;">Examination Unlocked</h2>
               <p>Dear ${studentExam.student.user.name},</p>
-               <p>The administrator has approved your re-entry request for the locked examination: <strong>${studentExam.exam.title}</strong>.</p>
+              <p>The ${actorRole.toLowerCase()} has approved your re-entry request for the locked examination: <strong>${studentExam.exam.title}</strong>.</p>
               <p>Please log in immediately and resume your exam. You will start exactly where you left off, with your remaining time and answers intact.</p>
               <p style="color: #64748b; font-size: 13px; margin-top: 30px; border-top: 1px solid #e2e8f0; padding-top: 10px;">Skill Cetamol Evaluation Systems</p>
             </div>
@@ -839,13 +859,13 @@ export const AdminController = {
         where: { id },
         data: {
           status: 'submitted',
+          score: 0,
           submittedAt: new Date()
         }
       });
 
       const totalPoints = studentExam.exam.totalMarks || 10;
-      const score = studentExam.score || 0;
-      const percentage = Math.round((score / totalPoints) * 100);
+      const percentage = 0;
 
       await prisma.result.upsert({
         where: {
@@ -868,11 +888,21 @@ export const AdminController = {
         }
       });
 
+      const actorRole = req.user?.role === 'faculty' ? 'Faculty Proctor' : 'Administrator';
+
       // Create Activity Log
       await prisma.activityLog.create({
         data: {
           userId: req.user!.id,
-          action: `Admin Revoked Exam Access for Student ${studentExam.student.user.name} in Exam: ${studentExam.exam.title}`
+          action: `${actorRole} Revoked Exam Access for Student ${studentExam.student.user.name} in Exam: ${studentExam.exam.title}`
+        }
+      });
+
+      await prisma.notification.create({
+        data: {
+          userId: studentExam.student.userId,
+          title: 'Exam Terminated',
+          message: `Your examination "${studentExam.exam.title}" was revoked due to repeated proctoring violations.`
         }
       });
 

@@ -1,8 +1,12 @@
 import { Router } from 'express';
+import multer from 'multer';
 import { AdminController } from '../controllers/adminController';
+import { FacultyController } from '../controllers/facultyController';
 import { authenticateToken, requireRole } from '../middleware/auth';
 import { validateBody } from '../middleware/validation';
 import { createFacultySchema } from '../validators';
+
+const upload = multer({ storage: multer.memoryStorage() });
 
 const router = Router();
 
@@ -27,6 +31,11 @@ router.delete('/departments/:id', requireRole(['admin', 'faculty']), AdminContro
 router.get('/courses', requireRole(['admin', 'faculty']), AdminController.getCourses);
 router.post('/courses', requireRole(['admin', 'faculty']), AdminController.createCourse);
 
+// Locked Examinations Proctor Monitor operations (accessible by Admin and Faculty)
+router.get('/locked-exams', requireRole(['admin', 'faculty']), AdminController.getLockedExams);
+router.put('/unlock-exam/:id', requireRole(['admin', 'faculty']), AdminController.unlockExam);
+router.put('/revoke-exam/:id', requireRole(['admin', 'faculty']), AdminController.revokeExam);
+
 router.use(requireRole(['admin']));
 
 router.get('/users', AdminController.getUsers);
@@ -36,13 +45,6 @@ router.post('/faculty', validateBody(createFacultySchema), AdminController.creat
 router.post('/faculty/:id/resend-welcome', AdminController.resendFacultyWelcome);
 router.post('/faculty/:id/reset-password', AdminController.resetUserPassword);
 router.post('/reset-database', AdminController.resetDatabase);
-
-// Subject operations
-
-// Locked Examinations Proctor Monitor operations
-router.get('/locked-exams', AdminController.getLockedExams);
-router.put('/unlock-exam/:id', AdminController.unlockExam);
-router.put('/revoke-exam/:id', AdminController.revokeExam);
 
 // Global Search & User Management
 router.get('/search-users', AdminController.searchUsers);
@@ -55,5 +57,9 @@ router.post('/user/:id/reset-password', AdminController.resetUserPassword);
 router.post('/questions', AdminController.createQuestion);
 router.put('/questions/:id', AdminController.updateQuestion);
 router.delete('/questions/:id', AdminController.deleteQuestion);
+router.post('/upload-qpaper', upload.fields([
+  { name: 'file', maxCount: 1 },
+  { name: 'answerFile', maxCount: 1 }
+]), FacultyController.uploadQPaper);
 
 export default router;

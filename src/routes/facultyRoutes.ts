@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import multer from 'multer';
 import { FacultyController } from '../controllers/facultyController';
+import { AdminController } from '../controllers/adminController';
 import { authenticateToken, requireRole } from '../middleware/auth';
 import { validateBody } from '../middleware/validation';
 import { createExamSchema, createQuestionSchema } from '../validators';
@@ -52,6 +53,11 @@ router.get('/uploaded-qpapers', FacultyController.getUploadedQPapers);
 router.get('/uploaded-qpapers/:id/questions', FacultyController.getQPaperQuestions);
 router.delete('/uploaded-qpapers/:id', FacultyController.deleteUploadedQPaper);
 router.post('/questions/generate-ai', FacultyController.generateAIQuestions);
+
+// Proctoring & Locked Examinations
+router.get('/locked-exams', AdminController.getLockedExams);
+router.put('/unlock-exam/:id', AdminController.unlockExam);
+router.put('/revoke-exam/:id', AdminController.revokeExam);
 
 export default router;
 

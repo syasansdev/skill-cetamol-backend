@@ -910,9 +910,25 @@ export const StudentController = {
             data: {
               userId: admin.id,
               title: 'Proctor Lock Triggered',
-              message: `Student ${student.user.name} has been locked out of exam "${exam.title}" due to multiple tab switches.`
+              message: `Student ${student.user.name} (${student.registerNumber}) has been locked out of exam "${exam.title}" due to multiple tab switches.`
             }
           });
+        }
+
+        if (exam.facultyId) {
+          const faculty = await prisma.faculty.findUnique({
+            where: { id: exam.facultyId },
+            include: { user: true }
+          });
+          if (faculty?.userId) {
+            await prisma.notification.create({
+              data: {
+                userId: faculty.userId,
+                title: 'Student Exam Locked (Proctoring)',
+                message: `Student ${student.user.name} (${student.registerNumber}) has been locked out of exam "${exam.title}" after 3 tab switches.`
+              }
+            });
+          }
         }
       }
 
