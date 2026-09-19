@@ -29,13 +29,15 @@ export async function seedExamsForAllQuestions() {
       });
     }
 
-    // 2. Get the unified Aptitude subject
+    // 2. Get canonical subject
     const subject = await prisma.subject.findFirst({
-      where: { subjectName: 'Aptitude' }
+      where: { subjectName: 'Company Specific Aptitude Assessment' }
+    }) || await prisma.subject.findFirst({
+      where: { subjectName: 'Quantitative & Reasoning Aptitude' }
     });
 
     if (!subject) {
-      console.warn('Subject Aptitude not found. Skipping exam creation.');
+      console.warn('Canonical subject not found. Skipping exam creation.');
       return;
     }
 

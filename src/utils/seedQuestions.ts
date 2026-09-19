@@ -170,17 +170,17 @@ export async function seedQuantitativeAptitudeQuestions() {
 
     // 3. Resolve Subject
     let subject = await prisma.subject.findFirst({
-      where: { subjectName: 'Aptitude' }
+      where: { subjectName: 'Quantitative & Reasoning Aptitude' }
     });
     if (!subject) {
       subject = await prisma.subject.create({
         data: {
-          subjectName: 'Aptitude',
+          subjectName: 'Quantitative & Reasoning Aptitude',
           courseId: cseCourse.id,
           semester: 1
         }
       });
-      console.log('Created subject: Aptitude');
+      console.log('Created subject: Quantitative & Reasoning Aptitude');
     }
 
     // 4. Resolve administrator user & faculty profile

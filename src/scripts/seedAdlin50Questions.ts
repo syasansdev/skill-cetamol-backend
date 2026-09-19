@@ -308,14 +308,14 @@ export async function seedAdlinData() {
     });
   }
 
-  // 3. Ensure Subject "Aptitude" exists
+  // 3. Ensure Subject "Advanced Computing" exists
   let subject = await prisma.subject.findFirst({
-    where: { subjectName: 'Aptitude' }
+    where: { subjectName: 'Advanced Computing' }
   });
   if (!subject) {
     subject = await prisma.subject.create({
       data: {
-        subjectName: 'Aptitude',
+        subjectName: 'Advanced Computing',
         courseId: course.id,
         semester: 1
       }

@@ -22,7 +22,7 @@ export const FacultyController = {
   getQuestions: async (req: AuthRequest, res: Response, next: NextFunction) => {
     try {
       const questions = await prisma.question.findMany({
-        include: { options: true, uploadedDocument: true },
+        include: { options: true, uploadedDocument: true, subject: true },
         orderBy: { createdAt: 'desc' }
       });
 
@@ -44,6 +44,7 @@ export const FacultyController = {
         return {
           id: q.id,
           subjectId: q.subjectId,
+          subjectName: q.subject?.subjectName,
           text: q.question, // map question -> text
           type: q.type,
           options: q.options.map(o => o.option), // option values as string array
@@ -51,7 +52,7 @@ export const FacultyController = {
           points: q.marks, // map marks -> points
           difficulty: q.difficulty,
           uploadedDocumentId: q.uploadedDocumentId || undefined,
-          paperName: q.paperName || q.uploadedDocument?.name || undefined,
+          paperName: q.paperName || q.uploadedDocument?.name || q.subject?.subjectName || undefined,
           createdAt: q.createdAt
         };
       });
@@ -65,26 +66,34 @@ export const FacultyController = {
   // 2. Create Single Question
   createQuestion: async (req: AuthRequest, res: Response, next: NextFunction) => {
     try {
-      const { subjectId, text, type, options, correctAnswer, points, difficulty } = req.body;
+      const { subjectId, text, type, options, correctAnswer, points, difficulty, paperName } = req.body;
 
       // Find faculty ID
-      const faculty = await prisma.faculty.findUnique({
+      let faculty = await prisma.faculty.findUnique({
         where: { userId: req.user!.id }
       });
+
+      if (!faculty) {
+        faculty = await prisma.faculty.findFirst();
+      }
 
       if (!faculty) {
         return res.status(403).json({ message: 'Faculty profile not found' });
       }
 
+      const subject = await prisma.subject.findUnique({ where: { id: subjectId } });
+      const resolvedPaperName = paperName || subject?.subjectName || 'Question Bank Pool';
+
       // Create Question
       const q = await prisma.question.create({
         data: {
           question: text,
-          type,
-          difficulty,
-          marks: points,
+          type: type || 'mcq',
+          difficulty: difficulty || 'medium',
+          marks: points || 5,
           facultyId: faculty.id,
-          subjectId
+          subjectId,
+          paperName: resolvedPaperName
         }
       });
 
@@ -112,12 +121,14 @@ export const FacultyController = {
       // Return newly created question in frontend format
       const enrichedQ = await prisma.question.findUnique({
         where: { id: q.id },
-        include: { options: true }
+        include: { options: true, subject: true }
       });
 
       return res.status(201).json({
         id: enrichedQ!.id,
         subjectId: enrichedQ!.subjectId,
+        subjectName: enrichedQ!.subject?.subjectName,
+        paperName: enrichedQ!.paperName,
         text: enrichedQ!.question,
         type: enrichedQ!.type,
         options: enrichedQ!.options.map(o => o.option),

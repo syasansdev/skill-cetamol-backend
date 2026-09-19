@@ -551,12 +551,26 @@ export const AdminController = {
         },
         orderBy: { subjectName: 'asc' }
       });
-      const mapped = list.map(s => ({
-        id: s.id,
-        name: s.subjectName,
-        code: s.subjectName.split(' ').map(x => x[0]).join('').toUpperCase(),
-        courseId: s.courseId
-      }));
+      // Deduplicate subjects by subjectName
+      const uniqueList = list.filter((s, idx, arr) =>
+        arr.findIndex(item => item.subjectName.toLowerCase() === s.subjectName.toLowerCase()) === idx
+      );
+      const mapped = uniqueList.map(s => {
+        // Clean acronym code (e.g. "Quantitative & Reasoning Aptitude" -> "QRA")
+        const code = s.subjectName
+          .replace(/&/g, '')
+          .split(/\s+/)
+          .filter(Boolean)
+          .map(x => x[0])
+          .join('')
+          .toUpperCase();
+        return {
+          id: s.id,
+          name: s.subjectName,
+          code,
+          courseId: s.courseId
+        };
+      });
       return res.status(200).json(mapped);
     } catch (error) {
       next(error);
@@ -566,13 +580,45 @@ export const AdminController = {
   createSubject: async (req: AuthRequest, res: Response, next: NextFunction) => {
     try {
       const { name, course, courseId, semester } = req.body;
-      
+      const trimmedName = (name || '').trim();
+
+      if (!trimmedName) {
+        return res.status(400).json({ message: 'Topic / Subject name is required' });
+      }
+
+      // Check if subject already exists case-insensitively
+      const existing = await prisma.subject.findFirst({
+        where: {
+          subjectName: {
+            equals: trimmedName,
+            mode: 'insensitive'
+          }
+        }
+      });
+
+      if (existing) {
+        const code = existing.subjectName
+          .replace(/&/g, '')
+          .split(/\s+/)
+          .filter(Boolean)
+          .map(x => x[0])
+          .join('')
+          .toUpperCase();
+        return res.status(200).json({
+          id: existing.id,
+          name: existing.subjectName,
+          code,
+          courseId: existing.courseId,
+          alreadyExisted: true
+        });
+      }
+
       let resolvedCourseId = courseId;
       if (!resolvedCourseId) {
         if (course) {
           // Find or create Course case-insensitively
           let crs = await prisma.course.findFirst({
-            where: { courseName: { equals: course } }
+            where: { courseName: { equals: course, mode: 'insensitive' } }
           });
           if (!crs) {
             let deptId;
@@ -589,7 +635,7 @@ export const AdminController = {
             }
             if (!deptId) {
               const d = await prisma.department.create({
-                data: { departmentName: 'AML', collegeId: null }
+                data: { departmentName: 'Placement Training', collegeId: null }
               });
               deptId = d.id;
             }
@@ -602,25 +648,27 @@ export const AdminController = {
           }
           resolvedCourseId = crs.id;
         } else {
-          // Fallback to default General Course
+          // Prefer Aptitude & Practice for Question Bank topics
           let defaultCourse = await prisma.course.findFirst({
-            where: { courseName: 'General Course' }
+            where: { courseName: 'Aptitude & Practice' }
           });
           if (!defaultCourse) {
-            let dept = await prisma.department.findFirst({
-              where: { departmentName: { in: ['AML', 'General'] } }
+            defaultCourse = await prisma.course.findFirst({
+              where: { courseName: 'General Course' }
             });
-            if (!dept) {
-              dept = await prisma.department.findFirst();
-            }
+          }
+          if (!defaultCourse) {
+            let dept = await prisma.department.findFirst({
+              where: { departmentName: { in: ['Placement Training', 'AML', 'General'] } }
+            }) || await prisma.department.findFirst();
             if (!dept) {
               dept = await prisma.department.create({
-                data: { departmentName: 'AML', collegeId: null }
+                data: { departmentName: 'Placement Training', collegeId: null }
               });
             }
             defaultCourse = await prisma.course.create({
               data: {
-                courseName: 'General Course',
+                courseName: 'Aptitude & Practice',
                 departmentId: dept.id
               }
             });
@@ -633,16 +681,24 @@ export const AdminController = {
 
       const subject = await prisma.subject.create({
         data: {
-          subjectName: name,
+          subjectName: trimmedName,
           courseId: resolvedCourseId,
           semester: finalSemester
         }
       });
 
+      const code = subject.subjectName
+        .replace(/&/g, '')
+        .split(/\s+/)
+        .filter(Boolean)
+        .map(x => x[0])
+        .join('')
+        .toUpperCase();
+
       return res.status(201).json({
         id: subject.id,
         name: subject.subjectName,
-        code: subject.subjectName.split(' ').map(x => x[0]).join('').toUpperCase(),
+        code,
         courseId: subject.courseId
       });
     } catch (error) {
@@ -1202,7 +1258,7 @@ export const AdminController = {
   // 10. Question Bank Management
   createQuestion: async (req: AuthRequest, res: Response, next: NextFunction) => {
     try {
-      const { subjectId, text, type, options, correctAnswer, points, difficulty } = req.body;
+      const { subjectId, text, type, options, correctAnswer, points, difficulty, paperName } = req.body;
 
       let faculty = await prisma.faculty.findFirst({ where: { userId: req.user!.id } });
       if (!faculty) {
@@ -1223,6 +1279,10 @@ export const AdminController = {
         });
       }
 
+      // Resolve subject and default paperName
+      const subject = await prisma.subject.findUnique({ where: { id: subjectId } });
+      const resolvedPaperName = paperName || subject?.subjectName || 'Question Bank Pool';
+
       const q = await prisma.question.create({
         data: {
           question: text,
@@ -1230,7 +1290,8 @@ export const AdminController = {
           difficulty: difficulty || 'medium',
           marks: points || 5,
           facultyId: faculty.id,
-          subjectId
+          subjectId,
+          paperName: resolvedPaperName
         }
       });
 
@@ -1256,12 +1317,14 @@ export const AdminController = {
 
       const enrichedQ = await prisma.question.findUnique({
         where: { id: q.id },
-        include: { options: true }
+        include: { options: true, subject: true }
       });
 
       return res.status(201).json({
         id: enrichedQ!.id,
         subjectId: enrichedQ!.subjectId,
+        subjectName: enrichedQ!.subject?.subjectName,
+        paperName: enrichedQ!.paperName,
         text: enrichedQ!.question,
         type: enrichedQ!.type,
         options: enrichedQ!.options.map(o => o.option),
@@ -1278,7 +1341,9 @@ export const AdminController = {
   updateQuestion: async (req: AuthRequest, res: Response, next: NextFunction) => {
     try {
       const { id } = req.params;
-      const { subjectId, text, type, options, correctAnswer, points, difficulty } = req.body;
+      const { subjectId, text, type, options, correctAnswer, points, difficulty, paperName } = req.body;
+
+      const subject = subjectId ? await prisma.subject.findUnique({ where: { id: subjectId } }) : null;
 
       await prisma.question.update({
         where: { id },
@@ -1287,7 +1352,8 @@ export const AdminController = {
           type,
           difficulty,
           marks: points,
-          subjectId
+          subjectId: subjectId || undefined,
+          paperName: paperName || (subject ? subject.subjectName : undefined)
         }
       });
 
@@ -1317,12 +1383,14 @@ export const AdminController = {
 
       const enrichedQ = await prisma.question.findUnique({
         where: { id },
-        include: { options: true }
+        include: { options: true, subject: true }
       });
 
       return res.status(200).json({
         id: enrichedQ!.id,
         subjectId: enrichedQ!.subjectId,
+        subjectName: enrichedQ!.subject?.subjectName,
+        paperName: enrichedQ!.paperName,
         text: enrichedQ!.question,
         type: enrichedQ!.type,
         options: enrichedQ!.options.map(o => o.option),
