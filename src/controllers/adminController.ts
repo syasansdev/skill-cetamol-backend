@@ -706,6 +706,133 @@ export const AdminController = {
     }
   },
 
+  deleteSubject: async (req: AuthRequest, res: Response, next: NextFunction) => {
+    try {
+      const { id } = req.params;
+
+      // 1. Find target subject
+      const targetSubject = await prisma.subject.findUnique({
+        where: { id }
+      });
+
+      if (!targetSubject) {
+        return res.status(404).json({ message: 'Topic / Subject not found.' });
+      }
+
+      // 2. Find all matching subjects with same name (to catch any duplicates)
+      const matchingSubjects = await prisma.subject.findMany({
+        where: {
+          subjectName: {
+            equals: targetSubject.subjectName,
+            mode: 'insensitive'
+          }
+        },
+        select: { id: true }
+      });
+      const subjectIds = Array.from(new Set([id, ...matchingSubjects.map(s => s.id)]));
+
+      // 3. Count questions under these subjects
+      const questionCount = await prisma.question.count({
+        where: {
+          subjectId: { in: subjectIds }
+        }
+      });
+
+      // 4. Perform atomic deletion in transaction
+      await prisma.$transaction(async (tx) => {
+        // Delete student answers for questions belonging to these subjects
+        await tx.studentAnswer.deleteMany({
+          where: {
+            question: {
+              subjectId: { in: subjectIds }
+            }
+          }
+        });
+
+        // Delete exam question associations
+        await tx.examQuestion.deleteMany({
+          where: {
+            question: {
+              subjectId: { in: subjectIds }
+            }
+          }
+        });
+
+        // Delete question options
+        await tx.questionOption.deleteMany({
+          where: {
+            question: {
+              subjectId: { in: subjectIds }
+            }
+          }
+        });
+
+        // Delete questions under these subjects
+        await tx.question.deleteMany({
+          where: {
+            subjectId: { in: subjectIds }
+          }
+        });
+
+        // Delete uploaded documents for this subject
+        await tx.uploadedDocument.deleteMany({
+          where: {
+            subjectId: { in: subjectIds }
+          }
+        });
+
+        // Delete portions
+        await tx.portion.deleteMany({
+          where: {
+            subjectId: { in: subjectIds }
+          }
+        });
+
+        // Delete notes
+        await tx.note.deleteMany({
+          where: {
+            subjectId: { in: subjectIds }
+          }
+        });
+
+        // Disassociate exams linked to this subject
+        await tx.exam.updateMany({
+          where: {
+            subjectId: { in: subjectIds }
+          },
+          data: {
+            subjectId: null
+          }
+        });
+
+        // Delete the subjects
+        await tx.subject.deleteMany({
+          where: {
+            id: { in: subjectIds }
+          }
+        });
+
+        // Log admin activity
+        if (req.user) {
+          await tx.activityLog.create({
+            data: {
+              userId: req.user.id,
+              action: `Deleted topic "${targetSubject.subjectName}" and ${questionCount} question(s)`
+            }
+          });
+        }
+      });
+
+      return res.status(200).json({
+        message: `Topic "${targetSubject.subjectName}" and all ${questionCount} question(s) were successfully deleted.`,
+        deletedTopicName: targetSubject.subjectName,
+        deletedQuestionsCount: questionCount
+      });
+    } catch (error) {
+      next(error);
+    }
+  },
+
   // Locked Examinations Proctor Monitor operations
   getLockedExams: async (req: AuthRequest, res: Response, next: NextFunction) => {
     try {
@@ -1437,9 +1564,54 @@ export const AdminController = {
   deleteQuestion: async (req: AuthRequest, res: Response, next: NextFunction) => {
     try {
       const { id } = req.params;
-      await prisma.questionOption.deleteMany({ where: { questionId: id } });
-      await prisma.question.delete({ where: { id } });
+      await prisma.$transaction(async (tx) => {
+        await tx.studentAnswer.deleteMany({ where: { questionId: id } });
+        await tx.examQuestion.deleteMany({ where: { questionId: id } });
+        await tx.questionOption.deleteMany({ where: { questionId: id } });
+        await tx.question.delete({ where: { id } });
+
+        if (req.user) {
+          await tx.activityLog.create({
+            data: {
+              userId: req.user.id,
+              action: `Deleted question ID: ${id}`
+            }
+          });
+        }
+      });
       return res.status(200).json({ message: 'Question deleted successfully' });
+    } catch (error) {
+      next(error);
+    }
+  },
+
+  bulkDeleteQuestions: async (req: AuthRequest, res: Response, next: NextFunction) => {
+    try {
+      const { ids } = req.body;
+      if (!Array.isArray(ids) || ids.length === 0) {
+        return res.status(400).json({ message: 'No question IDs provided for deletion.' });
+      }
+
+      await prisma.$transaction(async (tx) => {
+        await tx.studentAnswer.deleteMany({ where: { questionId: { in: ids } } });
+        await tx.examQuestion.deleteMany({ where: { questionId: { in: ids } } });
+        await tx.questionOption.deleteMany({ where: { questionId: { in: ids } } });
+        await tx.question.deleteMany({ where: { id: { in: ids } } });
+
+        if (req.user) {
+          await tx.activityLog.create({
+            data: {
+              userId: req.user.id,
+              action: `Bulk deleted ${ids.length} question(s)`
+            }
+          });
+        }
+      });
+
+      return res.status(200).json({
+        message: `Successfully deleted ${ids.length} question(s).`,
+        deletedCount: ids.length
+      });
     } catch (error) {
       next(error);
     }

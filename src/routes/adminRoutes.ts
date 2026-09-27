@@ -16,6 +16,7 @@ router.use(authenticateToken);
 // Accessible by Admin and Faculty
 router.get('/subjects', requireRole(['admin', 'faculty']), AdminController.getSubjects);
 router.post('/subjects', requireRole(['admin', 'faculty']), AdminController.createSubject);
+router.delete('/subjects/:id', requireRole(['admin', 'faculty']), AdminController.deleteSubject);
 
 // College operations (accessible by admin and faculty)
 router.get('/colleges', requireRole(['admin', 'faculty']), AdminController.getColleges);
@@ -55,6 +56,7 @@ router.post('/user/:id/reset-password', AdminController.resetUserPassword);
 
 // Question Bank Operations
 router.post('/questions', AdminController.createQuestion);
+router.post('/questions/bulk-delete', AdminController.bulkDeleteQuestions);
 router.put('/questions/:id', AdminController.updateQuestion);
 router.delete('/questions/:id', AdminController.deleteQuestion);
 router.post('/upload-qpaper', upload.fields([
