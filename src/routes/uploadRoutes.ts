@@ -16,7 +16,7 @@ router.post('/departments', requireRole(['admin']), upload.single('file'), Uploa
 router.post('/courses', requireRole(['admin']), upload.single('file'), UploadController.uploadCourses);
 router.post('/subjects', requireRole(['admin']), upload.single('file'), UploadController.uploadSubjects);
 
-// Faculty question uploads
-router.post('/questions', requireRole(['faculty']), upload.single('file'), UploadController.uploadQuestions);
+// Question uploads (Admin and Faculty)
+router.post('/questions', requireRole(['admin', 'faculty']), upload.single('file'), UploadController.uploadQuestions);
 
 export default router;

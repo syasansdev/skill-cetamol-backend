@@ -57,11 +57,17 @@ router.post('/user/:id/reset-password', AdminController.resetUserPassword);
 // Question Bank Operations
 router.post('/questions', AdminController.createQuestion);
 router.post('/questions/bulk-delete', AdminController.bulkDeleteQuestions);
+router.post('/questions/delete-by-subject', AdminController.deleteQuestionsBySubject);
 router.put('/questions/:id', AdminController.updateQuestion);
 router.delete('/questions/:id', AdminController.deleteQuestion);
+// Question extraction and Q-Papers registry for Admin
 router.post('/upload-qpaper', upload.fields([
   { name: 'file', maxCount: 1 },
   { name: 'answerFile', maxCount: 1 }
 ]), FacultyController.uploadQPaper);
+router.get('/uploaded-qpapers', FacultyController.getUploadedQPapers);
+router.get('/uploaded-qpapers/:id/questions', FacultyController.getQPaperQuestions);
+router.delete('/uploaded-qpapers/:id', FacultyController.deleteUploadedQPaper);
+router.post('/questions/generate-ai', FacultyController.generateAIQuestions);
 
 export default router;

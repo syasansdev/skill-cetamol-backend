@@ -731,102 +731,55 @@ export const AdminController = {
       });
       const subjectIds = Array.from(new Set([id, ...matchingSubjects.map(s => s.id)]));
 
-      // 3. Count questions under these subjects
-      const questionCount = await prisma.question.count({
+      // 3. Find question IDs first directly (avoids slow relation joins in deletes)
+      const questions = await prisma.question.findMany({
         where: {
           subjectId: { in: subjectIds }
-        }
+        },
+        select: { id: true }
       });
+      const qIds = questions.map(q => q.id);
 
-      // 4. Perform atomic deletion in transaction
+      // 4. Delete questions and their relations in safe, indexed chunks of 100
+      const chunkSize = 100;
+      for (let i = 0; i < qIds.length; i += chunkSize) {
+        const chunk = qIds.slice(i, i + chunkSize);
+        await prisma.$transaction(async (tx) => {
+          await tx.studentAnswer.deleteMany({ where: { questionId: { in: chunk } } });
+          await tx.examQuestion.deleteMany({ where: { questionId: { in: chunk } } });
+          await tx.questionOption.deleteMany({ where: { questionId: { in: chunk } } });
+          await tx.question.deleteMany({ where: { id: { in: chunk } } });
+        }, { timeout: 30000, maxWait: 10000 });
+      }
+
+      // 5. Clean up subject-level records in transaction with extended timeout
       await prisma.$transaction(async (tx) => {
-        // Delete student answers for questions belonging to these subjects
-        await tx.studentAnswer.deleteMany({
-          where: {
-            question: {
-              subjectId: { in: subjectIds }
-            }
-          }
-        });
-
-        // Delete exam question associations
-        await tx.examQuestion.deleteMany({
-          where: {
-            question: {
-              subjectId: { in: subjectIds }
-            }
-          }
-        });
-
-        // Delete question options
-        await tx.questionOption.deleteMany({
-          where: {
-            question: {
-              subjectId: { in: subjectIds }
-            }
-          }
-        });
-
-        // Delete questions under these subjects
-        await tx.question.deleteMany({
-          where: {
-            subjectId: { in: subjectIds }
-          }
-        });
-
-        // Delete uploaded documents for this subject
-        await tx.uploadedDocument.deleteMany({
-          where: {
-            subjectId: { in: subjectIds }
-          }
-        });
-
-        // Delete portions
-        await tx.portion.deleteMany({
-          where: {
-            subjectId: { in: subjectIds }
-          }
-        });
-
-        // Delete notes
-        await tx.note.deleteMany({
-          where: {
-            subjectId: { in: subjectIds }
-          }
-        });
-
-        // Disassociate exams linked to this subject
+        // Any remaining questions (safety check)
+        await tx.question.deleteMany({ where: { subjectId: { in: subjectIds } } });
+        await tx.uploadedDocument.deleteMany({ where: { subjectId: { in: subjectIds } } });
+        await tx.portion.deleteMany({ where: { subjectId: { in: subjectIds } } });
+        await tx.note.deleteMany({ where: { subjectId: { in: subjectIds } } });
         await tx.exam.updateMany({
-          where: {
-            subjectId: { in: subjectIds }
-          },
-          data: {
-            subjectId: null
-          }
+          where: { subjectId: { in: subjectIds } },
+          data: { subjectId: null }
         });
+        await tx.subject.deleteMany({ where: { id: { in: subjectIds } } });
 
-        // Delete the subjects
-        await tx.subject.deleteMany({
-          where: {
-            id: { in: subjectIds }
-          }
-        });
-
-        // Log admin activity
         if (req.user) {
           await tx.activityLog.create({
             data: {
               userId: req.user.id,
-              action: `Deleted topic "${targetSubject.subjectName}" and ${questionCount} question(s)`
+              action: `Deleted topic "${targetSubject.subjectName}" and ${qIds.length} question(s)`
             }
-          });
+          }).catch(() => {});
         }
-      });
+      }, { timeout: 30000, maxWait: 10000 });
 
       return res.status(200).json({
-        message: `Topic "${targetSubject.subjectName}" and all ${questionCount} question(s) were successfully deleted.`,
+        message: `Topic "${targetSubject.subjectName}" and ${qIds.length} question(s) were successfully deleted.`,
         deletedTopicName: targetSubject.subjectName,
-        deletedQuestionsCount: questionCount
+        deletedCount: qIds.length,
+        deletedQuestionsCount: qIds.length
       });
     } catch (error) {
       next(error);
@@ -1592,25 +1545,91 @@ export const AdminController = {
         return res.status(400).json({ message: 'No question IDs provided for deletion.' });
       }
 
-      await prisma.$transaction(async (tx) => {
-        await tx.studentAnswer.deleteMany({ where: { questionId: { in: ids } } });
-        await tx.examQuestion.deleteMany({ where: { questionId: { in: ids } } });
-        await tx.questionOption.deleteMany({ where: { questionId: { in: ids } } });
-        await tx.question.deleteMany({ where: { id: { in: ids } } });
+      const chunkSize = 100;
+      let totalDeleted = 0;
+      for (let i = 0; i < ids.length; i += chunkSize) {
+        const chunk = ids.slice(i, i + chunkSize);
+        await prisma.$transaction(async (tx) => {
+          await tx.studentAnswer.deleteMany({ where: { questionId: { in: chunk } } });
+          await tx.examQuestion.deleteMany({ where: { questionId: { in: chunk } } });
+          await tx.questionOption.deleteMany({ where: { questionId: { in: chunk } } });
+          await tx.question.deleteMany({ where: { id: { in: chunk } } });
+        }, { timeout: 30000, maxWait: 10000 });
+        totalDeleted += chunk.length;
+      }
 
-        if (req.user) {
-          await tx.activityLog.create({
-            data: {
-              userId: req.user.id,
-              action: `Bulk deleted ${ids.length} question(s)`
-            }
-          });
-        }
-      });
+      if (req.user) {
+        await prisma.activityLog.create({
+          data: {
+            userId: req.user.id,
+            action: `Bulk deleted ${totalDeleted} question(s)`
+          }
+        }).catch(() => {});
+      }
 
       return res.status(200).json({
-        message: `Successfully deleted ${ids.length} question(s).`,
-        deletedCount: ids.length
+        message: `Successfully deleted ${totalDeleted} question(s).`,
+        deletedCount: totalDeleted
+      });
+    } catch (error) {
+      next(error);
+    }
+  },
+
+  deleteQuestionsBySubject: async (req: AuthRequest, res: Response, next: NextFunction) => {
+    try {
+      const { subjectId } = req.body;
+      if (!subjectId) {
+        return res.status(400).json({ message: 'Subject ID is required.' });
+      }
+
+      const subject = await prisma.subject.findUnique({
+        where: { id: subjectId }
+      });
+      if (!subject) {
+        return res.status(404).json({ message: 'Subject / Topic not found.' });
+      }
+
+      // 1. Find all question IDs for this subject
+      const questions = await prisma.question.findMany({
+        where: { subjectId },
+        select: { id: true }
+      });
+
+      const qIds = questions.map(q => q.id);
+      if (qIds.length === 0) {
+        return res.status(200).json({
+          message: `No questions found under topic "${subject.subjectName}".`,
+          deletedCount: 0
+        });
+      }
+
+      // 2. Delete questions in safe chunks of 100
+      const chunkSize = 100;
+      let totalDeleted = 0;
+      for (let i = 0; i < qIds.length; i += chunkSize) {
+        const chunk = qIds.slice(i, i + chunkSize);
+        await prisma.$transaction(async (tx) => {
+          await tx.studentAnswer.deleteMany({ where: { questionId: { in: chunk } } });
+          await tx.examQuestion.deleteMany({ where: { questionId: { in: chunk } } });
+          await tx.questionOption.deleteMany({ where: { questionId: { in: chunk } } });
+          await tx.question.deleteMany({ where: { id: { in: chunk } } });
+        }, { timeout: 30000, maxWait: 10000 });
+        totalDeleted += chunk.length;
+      }
+
+      if (req.user) {
+        await prisma.activityLog.create({
+          data: {
+            userId: req.user.id,
+            action: `Deleted all ${totalDeleted} questions from topic "${subject.subjectName}"`
+          }
+        }).catch(() => {});
+      }
+
+      return res.status(200).json({
+        message: `Successfully deleted all ${totalDeleted} question(s) from "${subject.subjectName}".`,
+        deletedCount: totalDeleted
       });
     } catch (error) {
       next(error);
@@ -1657,7 +1676,7 @@ export const AdminController = {
 
   createCollege: async (req: AuthRequest, res: Response, next: NextFunction) => {
     try {
-      const { collegeName, code } = req.body;
+      const { collegeName, code, category } = req.body;
       if (!collegeName || !collegeName.trim()) {
         return res.status(400).json({ message: 'College name is required' });
       }
@@ -1665,7 +1684,39 @@ export const AdminController = {
       const college = await prisma.college.create({
         data: { collegeName: collegeName.trim(), code: code?.trim() || null }
       });
-      return res.status(201).json(college);
+
+      // Auto-create initial department(s) matching the chosen category so student registration
+      // and department filtering immediately recognise this college
+      const cat = category || 'Both';
+      if (cat === 'Engineering' || cat === 'Both') {
+        try {
+          await prisma.department.create({
+            data: {
+              departmentName: 'General Engineering',
+              category: 'Engineering',
+              collegeId: college.id
+            }
+          });
+        } catch (e) {}
+      }
+      if (cat === 'Arts & Science' || cat === 'Both') {
+        try {
+          await prisma.department.create({
+            data: {
+              departmentName: 'General Arts & Science',
+              category: 'Arts & Science',
+              collegeId: college.id
+            }
+          });
+        } catch (e) {}
+      }
+
+      const collegeWithDepts = await prisma.college.findUnique({
+        where: { id: college.id },
+        include: { departments: true }
+      });
+
+      return res.status(201).json(collegeWithDepts || college);
     } catch (error) {
       next(error);
     }

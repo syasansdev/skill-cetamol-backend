@@ -1509,7 +1509,8 @@ export const FacultyController = {
   // 18. Upload Q-Paper & Extract Questions
   uploadQPaper: async (req: AuthRequest, res: Response, next: NextFunction) => {
     try {
-      const { name, subjectId } = req.body;
+      const { name, subjectId, questionType } = req.body;
+      const mode: 'mcq' | 'checkbox' | 'auto' = (questionType as 'mcq' | 'checkbox' | 'auto') || 'mcq';
       
       const files = req.files as { [fieldname: string]: Express.Multer.File[] } | undefined;
       const qpaperFile = files && files['file'] ? files['file'][0] : undefined;
@@ -1582,20 +1583,20 @@ export const FacultyController = {
       if (fileType === 'pdf') {
         const text = await Extractor.extractTextFromPDF(qpaperFile.buffer);
         if (answerFile && answerText) {
-          parsedQuestions = Extractor.parseQuestionsWithSeparateAnswers(text, answerText);
+          parsedQuestions = Extractor.parseQuestionsWithSeparateAnswers(text, answerText, mode);
         } else {
-          parsedQuestions = Extractor.parseUnstructuredQuestions(text);
+          parsedQuestions = Extractor.parseUnstructuredQuestions(text, mode);
         }
       } else if (fileType === 'docx') {
         const text = await Extractor.extractTextFromDOCX(qpaperFile.buffer);
         if (answerFile && answerText) {
-          parsedQuestions = Extractor.parseQuestionsWithSeparateAnswers(text, answerText);
+          parsedQuestions = Extractor.parseQuestionsWithSeparateAnswers(text, answerText, mode);
         } else {
-          parsedQuestions = Extractor.parseUnstructuredQuestions(text);
+          parsedQuestions = Extractor.parseUnstructuredQuestions(text, mode);
         }
       } else if (fileType === 'csv') {
         const text = qpaperFile.buffer.toString('utf-8');
-        parsedQuestions = Extractor.parseCSVQuestions(text);
+        parsedQuestions = Extractor.parseCSVQuestions(text, mode);
       }
 
       if (parsedQuestions.length === 0) {
@@ -1667,15 +1668,19 @@ export const FacultyController = {
   // 19. Get Uploaded Q-Papers list
   getUploadedQPapers: async (req: AuthRequest, res: Response, next: NextFunction) => {
     try {
-      const faculty = await prisma.faculty.findUnique({
-        where: { userId: req.user!.id }
-      });
-      if (!faculty) {
-        return res.status(403).json({ message: 'Faculty profile not found' });
+      let whereClause: any = {};
+      if (req.user?.role !== 'admin') {
+        const faculty = await prisma.faculty.findUnique({
+          where: { userId: req.user!.id }
+        });
+        if (!faculty) {
+          return res.status(403).json({ message: 'Faculty profile not found' });
+        }
+        whereClause.facultyId = faculty.id;
       }
 
       const docs = await prisma.uploadedDocument.findMany({
-        where: { facultyId: faculty.id },
+        where: whereClause,
         include: {
           subject: true,
           questions: true
@@ -1787,9 +1792,31 @@ export const FacultyController = {
         return res.status(400).json({ message: 'Subject and topic are required' });
       }
 
-      const faculty = await prisma.faculty.findUnique({
+      let faculty = await prisma.faculty.findUnique({
         where: { userId: req.user!.id }
       });
+      if (!faculty && req.user?.role === 'admin') {
+        faculty = await prisma.faculty.findFirst({
+          where: { userId: req.user!.id }
+        });
+        if (!faculty) {
+          faculty = await prisma.faculty.findFirst();
+        }
+        if (!faculty) {
+          let dummyDept = await prisma.department.findFirst();
+          if (!dummyDept) {
+            dummyDept = await prisma.department.create({ data: { departmentName: 'General' } });
+          }
+          faculty = await prisma.faculty.create({
+            data: {
+              userId: req.user!.id,
+              departmentId: dummyDept.id,
+              designation: 'Administrator',
+              experience: 5
+            }
+          });
+        }
+      }
       if (!faculty) {
         return res.status(403).json({ message: 'Faculty profile not found' });
       }

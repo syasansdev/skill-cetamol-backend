@@ -802,6 +802,11 @@ export const AuthController = {
             { collegeName: { startsWith: 'Test', mode: 'insensitive' } }
           ]
         },
+        include: {
+          departments: {
+            select: { id: true, departmentName: true, category: true }
+          }
+        },
         orderBy: { collegeName: 'asc' }
       });
       const departments = await prisma.department.findMany({

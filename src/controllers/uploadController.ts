@@ -389,9 +389,32 @@ export const UploadController = {
         }));
       }
 
-      const faculty = await prisma.faculty.findUnique({
+      let faculty = await prisma.faculty.findUnique({
         where: { userId: req.user!.id }
       });
+
+      if (!faculty && req.user?.role === 'admin') {
+        faculty = await prisma.faculty.findFirst({
+          where: { userId: req.user!.id }
+        });
+        if (!faculty) {
+          faculty = await prisma.faculty.findFirst();
+        }
+        if (!faculty) {
+          let dummyDept = await prisma.department.findFirst();
+          if (!dummyDept) {
+            dummyDept = await prisma.department.create({ data: { departmentName: 'General' } });
+          }
+          faculty = await prisma.faculty.create({
+            data: {
+              userId: req.user!.id,
+              departmentId: dummyDept.id,
+              designation: 'Administrator',
+              experience: 5
+            }
+          });
+        }
+      }
 
       if (!faculty) {
         return res.status(403).json({ message: 'Faculty profile not found' });
@@ -409,7 +432,10 @@ export const UploadController = {
         const errors: string[] = [];
 
         const questionText = item.question || item.text;
-        const type = item.type;
+        let type = item.type;
+        if (req.body.questionType === 'mcq') type = 'mcq';
+        else if (req.body.questionType === 'checkbox') type = 'checkbox';
+
         const difficulty = item.difficulty || 'medium';
         const marks = parseInt(item.marks) || 5;
         const subjectId = item.subjectId;
@@ -454,15 +480,25 @@ export const UploadController = {
 
           // Insert options
           if (type !== 'text' && options && options.length > 0) {
+            const cleanAnsStr = String(correctAnswer).trim().toLowerCase();
+            let matchedFirst = false;
             const optionData = options.map((optVal: string, idx: number) => {
               let isCorrect = false;
+              const optLetter = String.fromCharCode(65 + idx).toLowerCase();
+              const optClean = optVal.trim().toLowerCase();
+
               if (type === 'mcq') {
-                isCorrect = String(idx) === String(correctAnswer);
+                const isMatch = String(idx) === cleanAnsStr || optLetter === cleanAnsStr || optClean === cleanAnsStr;
+                if (isMatch && !matchedFirst) {
+                  isCorrect = true;
+                  matchedFirst = true;
+                }
               } else if (type === 'checkbox') {
                 const correctIndices = Array.isArray(correctAnswer) 
                   ? correctAnswer.map(String)
-                  : String(correctAnswer).split(',');
-                isCorrect = correctIndices.includes(String(idx));
+                  : String(correctAnswer).split(/[,|]/);
+                const cleanList = correctIndices.map(s => s.trim().toLowerCase());
+                isCorrect = cleanList.includes(String(idx)) || cleanList.includes(optLetter) || cleanList.includes(optClean);
               }
               return {
                 questionId: q.id,
@@ -470,6 +506,12 @@ export const UploadController = {
                 isCorrect
               };
             });
+
+            // Fallback for MCQ if no option matched: default to first option
+            if (type === 'mcq' && !matchedFirst && optionData.length > 0) {
+              optionData[0].isCorrect = true;
+            }
+
             await prisma.questionOption.createMany({ data: optionData });
           }
 
