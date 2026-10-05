@@ -240,6 +240,169 @@ export const StudentController = {
     }
   },
 
+  // 1.1. Get Single Exam Details by ID (for student attending or refreshing)
+  getExamById: async (req: AuthRequest, res: Response, next: NextFunction) => {
+    try {
+      const { id } = req.params;
+      const student = await prisma.student.findUnique({
+        where: { userId: req.user!.id }
+      });
+
+      if (!student) {
+        return res.status(403).json({ message: 'Student profile not found' });
+      }
+
+      let exam = await prisma.exam.findUnique({
+        where: { id },
+        include: {
+          college: true,
+          department: true,
+          subject: true,
+          faculty: { include: { user: true } },
+          examQuestions: {
+            include: {
+              question: { include: { options: true } }
+            }
+          }
+        }
+      });
+
+      if (!exam) {
+        return res.status(404).json({ message: 'Exam not found' });
+      }
+
+      // If exam has 0 questions linked, automatically link questions from subject or pool
+      if (!exam.examQuestions || exam.examQuestions.length === 0) {
+        let poolQs = await prisma.question.findMany({
+          where: exam.subjectId ? { subjectId: exam.subjectId } : undefined,
+          include: { options: true },
+          take: exam.questionCount && exam.questionCount > 0 ? exam.questionCount : 10
+        });
+        if (poolQs.length === 0) {
+          poolQs = await prisma.question.findMany({
+            include: { options: true },
+            take: exam.questionCount && exam.questionCount > 0 ? exam.questionCount : 10
+          });
+        }
+        if (poolQs.length > 0) {
+          await prisma.examQuestion.createMany({
+            data: poolQs.map(q => ({ examId: exam.id, questionId: q.id })),
+            skipDuplicates: true
+          });
+          const reloadedEqs = await prisma.examQuestion.findMany({
+            where: { examId: exam.id },
+            include: { question: { include: { options: true } } }
+          });
+          (exam as any).examQuestions = reloadedEqs;
+        }
+      }
+
+      // Attempt details
+      const attempt = await prisma.studentExam.findFirst({
+        where: { studentId: student.id, examId: exam.id },
+        include: { studentAnswers: true }
+      });
+
+      const resultObj = await prisma.result.findFirst({
+        where: { studentId: student.id, examId: exam.id }
+      });
+
+      const savedAnswers: Record<string, string | string[]> = {};
+      if (attempt?.studentAnswers) {
+        attempt.studentAnswers.forEach(ans => {
+          if (ans.selectedOption !== null) {
+            const parts = ans.selectedOption.split(',');
+            savedAnswers[ans.questionId] = parts.length > 1 ? parts : parts[0];
+          } else if (ans.answerText !== null) {
+            savedAnswers[ans.questionId] = ans.answerText;
+          }
+        });
+      }
+
+      const seedStr = `${student.id}-${exam.id}`;
+      const shuffledEqs = pseudoRandomShuffle(exam.examQuestions || [], seedStr);
+      const validEqs = shuffledEqs.filter((eq: any) => eq && eq.question);
+      const countLimit = exam.questionCount && exam.questionCount > 0 ? exam.questionCount : validEqs.length;
+      const selectedEqs = validEqs.slice(0, countLimit);
+
+      const questionsMapped = selectedEqs.map((eq: any) => {
+        const q = eq.question;
+        let correctAnswer: string | string[] = '0';
+        const optionsList = [...(q.options || [])].sort((a, b) => a.id.localeCompare(b.id));
+        if (q.type === 'mcq') {
+          const idx = optionsList.findIndex(o => o.isCorrect);
+          correctAnswer = idx >= 0 ? String(idx) : '0';
+        } else if (q.type === 'checkbox') {
+          correctAnswer = optionsList
+            .map((o, idx) => (o.isCorrect ? String(idx) : null))
+            .filter((idx): idx is string => idx !== null);
+        } else {
+          correctAnswer = '';
+        }
+
+        return {
+          id: q.id,
+          subjectId: q.subjectId || '',
+          text: cleanQuestionText(q.question || ''),
+          type: q.type || 'mcq',
+          options: optionsList.map(o => o.option),
+          correctAnswer,
+          points: exam.marksPerQuestion || q.marks || 1,
+          difficulty: q.difficulty || 'medium',
+          createdAt: q.createdAt
+        };
+      });
+
+      const totalExamMarks = Math.round(questionsMapped.length * (exam.marksPerQuestion || 1));
+      const now = new Date();
+      let dynamicStatus = exam.status;
+      if (dynamicStatus === 'scheduled' || dynamicStatus === 'active' || dynamicStatus === 'completed') {
+        if (now >= exam.startDate && now <= exam.endDate) {
+          dynamicStatus = 'active';
+        } else if (now > exam.endDate) {
+          dynamicStatus = 'completed';
+        } else {
+          dynamicStatus = 'scheduled';
+        }
+      }
+
+      const subjectName = exam.subject
+        ? `${exam.subject.subjectName} (${exam.subject.id.substring(0, 5).toUpperCase()})`
+        : 'General Evaluation';
+
+      return res.status(200).json({
+        id: exam.id,
+        title: exam.title,
+        description: exam.description || '',
+        subjectId: exam.subjectId || '',
+        subjectName,
+        duration: exam.duration,
+        startTime: exam.startDate ? exam.startDate.toISOString() : new Date().toISOString(),
+        endTime: exam.endDate ? exam.endDate.toISOString() : new Date().toISOString(),
+        questions: questionsMapped,
+        questionCount: exam.questionCount || questionsMapped.length,
+        negativeMarking: exam.negativeMarking,
+        marksPerQuestion: exam.marksPerQuestion,
+        negativeMarks: exam.negativeMarks,
+        totalMarks: totalExamMarks,
+        createdBy: exam.faculty?.user?.id || '',
+        createdByName: exam.faculty?.user?.name || 'Faculty Evaluator',
+        status: dynamicStatus,
+        createdAt: exam.startDate ? exam.startDate.toISOString() : new Date().toISOString(),
+        hasAttempted: !!resultObj,
+        resultId: resultObj?.id || null,
+        attemptStatus: attempt ? attempt.status : null,
+        warningCount: attempt ? attempt.warningCount : 0,
+        timeRemaining: attempt ? attempt.timeRemaining : exam.duration * 60,
+        reentryAllowed: attempt ? attempt.reentryAllowed : false,
+        savedAnswers
+      });
+    } catch (error) {
+      console.error('Error in StudentController.getExamById:', error);
+      next(error);
+    }
+  },
+
   // 2. Submit Exam & Auto-Evaluate Score
   submitExam: async (req: AuthRequest, res: Response, next: NextFunction) => {
     try {

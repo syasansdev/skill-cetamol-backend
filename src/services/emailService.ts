@@ -12,8 +12,12 @@ const sendMailWithRetry = async (mailOptions: any, maxRetries: number = 2) => {
     } catch (err: any) {
       lastError = err;
       console.warn(`[EmailService] Attempt ${attempt} failed to send email to ${mailOptions.to}:`, err.message);
+      // If quota exceeded or auth error, do not retry
+      if (err.message?.includes('limit exceeded') || err.message?.includes('550') || err.message?.includes('Invalid login')) {
+        break;
+      }
       if (attempt <= maxRetries) {
-        await new Promise(res => setTimeout(res, attempt * 1200));
+        await new Promise(res => setTimeout(res, attempt * 1000));
       }
     }
   }

@@ -30,6 +30,7 @@ router.use(authenticateToken);
 router.use(requireRole(['student']));
 
 router.get('/exams', StudentController.getExams);
+router.get('/exams/:id', StudentController.getExamById);
 router.post('/exams/:id/submit', StudentController.submitExam);
 router.post('/exams/:id/auto-save', StudentController.autoSaveExam);
 router.post('/exams/:id/proctor-event', StudentController.logProctorEvent);

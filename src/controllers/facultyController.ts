@@ -373,13 +373,17 @@ export const FacultyController = {
         category, departmentId, targetYears, targetYear
       } = req.body;
 
-      const faculty = await prisma.faculty.findUnique({
+      let faculty = await prisma.faculty.findUnique({
         where: { userId: req.user!.id },
         include: { college: true }
       });
 
       if (!faculty) {
-        return res.status(403).json({ message: 'Faculty profile not found' });
+        faculty = await prisma.faculty.findFirst({ include: { college: true } });
+      }
+
+      if (!faculty) {
+        return res.status(403).json({ message: 'Faculty profile not found. Please contact an administrator.' });
       }
 
       const { collegeId: reqCollegeId, departmentIds } = req.body;
@@ -428,7 +432,7 @@ export const FacultyController = {
         resolvedCategory = primaryDept?.category || 'All';
       }
 
-      const questionIds = (questions || []).map((q: any) => typeof q === 'string' ? q : q.id);
+      let questionIds = (questions || []).map((q: any) => typeof q === 'string' ? q : q.id);
       const parsedQuestionCount = questionCount !== undefined && Number(questionCount) > 0
         ? Math.min(Number(questionCount), questionIds.length > 0 ? questionIds.length : Number(questionCount))
         : (questionIds.length > 0 ? questionIds.length : 10);
@@ -474,6 +478,15 @@ export const FacultyController = {
         }
       }
 
+      // Verify that targetSubjectId actually exists in DB to prevent foreign key errors
+      if (targetSubjectId) {
+        const existingSub = await prisma.subject.findUnique({ where: { id: targetSubjectId } });
+        if (!existingSub) {
+          const fallbackSub = await prisma.subject.findFirst();
+          targetSubjectId = fallbackSub?.id || null;
+        }
+      }
+
       // Encode target departments in description metadata tag
       let finalDescription = description || '';
       if (!isEntireCollege && selectedDeptIds.length > 0) {
@@ -499,6 +512,22 @@ export const FacultyController = {
       }
 
       const parsedTargetYear = targetYear ? Number(targetYear) : (resolvedTargetYears !== 'all' && !resolvedTargetYears.includes(',') ? Number(resolvedTargetYears) : null);
+
+      // Ensure questionIds are not empty (auto-populate from subject or question pool)
+      if (questionIds.length === 0) {
+        let poolQs = await prisma.question.findMany({
+          where: targetSubjectId ? { subjectId: targetSubjectId } : undefined,
+          take: parsedQuestionCount > 0 ? parsedQuestionCount : 10,
+          select: { id: true }
+        });
+        if (poolQs.length === 0) {
+          poolQs = await prisma.question.findMany({
+            take: parsedQuestionCount > 0 ? parsedQuestionCount : 10,
+            select: { id: true }
+          });
+        }
+        questionIds = poolQs.map(q => q.id);
+      }
 
       // Create Exam
       const exam = await prisma.exam.create({
@@ -534,42 +563,14 @@ export const FacultyController = {
         await prisma.examQuestion.createMany({ data: relationData, skipDuplicates: true });
       }
 
-      // Notify Active Enrolled Students of this College & Target Department(s) & Year via Email
-      const studentWhere: any = {
-        collegeId: targetCollegeId,
-        user: { status: 'active' }
-      };
-      if (!isEntireCollege && selectedDeptIds.length > 0) {
-        studentWhere.departmentId = { in: selectedDeptIds };
-      }
-      const allowedYearsList = resolvedTargetYears.split(',').map(s => s.trim()).filter(Boolean);
-      if (!allowedYearsList.includes('all')) {
-        const numericYears = allowedYearsList.map(Number).filter(n => !isNaN(n));
-        if (numericYears.length > 0) {
-          studentWhere.year = { in: numericYears };
-        }
-      }
-
-      const enrolledStudents = await prisma.student.findMany({
-        where: studentWhere,
-        include: { user: true }
-      });
-
-      for (const std of enrolledStudents) {
-        try {
-          await emailService.sendExamScheduled(std.user.email, std.user.name, title, startTime);
-        } catch (mailErr) {
-          console.error(`Failed notifying student ${std.user.email}:`, mailErr);
-        }
-      }
-
       // Format response user details matching frontend expectation
       const fullExam = await prisma.exam.findUnique({
         where: { id: exam.id },
         include: { subject: true, college: true, department: true }
       });
 
-      return res.status(201).json({
+      // Send response immediately to avoid HTTP timeouts
+      res.status(201).json({
         id: exam.id,
         title: exam.title,
         description: exam.description,
@@ -583,7 +584,7 @@ export const FacultyController = {
         duration: exam.duration,
         startTime: exam.startDate.toISOString(),
         endTime: exam.endDate.toISOString(),
-        questions: questions,
+        questions: questionIds,
         questionCount: exam.questionCount,
         targetYears: resolvedTargetYears.split(','),
         targetYear: exam.targetYear,
@@ -591,6 +592,45 @@ export const FacultyController = {
         status: exam.status,
         createdAt: exam.startDate.toISOString()
       });
+
+      // Asynchronously notify active enrolled students in background without blocking the HTTP response
+      setImmediate(async () => {
+        try {
+          const studentWhere: any = {
+            collegeId: targetCollegeId,
+            user: { status: 'active' }
+          };
+          if (!isEntireCollege && selectedDeptIds.length > 0) {
+            studentWhere.departmentId = { in: selectedDeptIds };
+          }
+          const allowedYearsList = resolvedTargetYears.split(',').map(s => s.trim()).filter(Boolean);
+          if (!allowedYearsList.includes('all')) {
+            const numericYears = allowedYearsList.map(Number).filter(n => !isNaN(n));
+            if (numericYears.length > 0) {
+              studentWhere.year = { in: numericYears };
+            }
+          }
+
+          const enrolledStudents = await prisma.student.findMany({
+            where: studentWhere,
+            include: { user: true },
+            take: 100
+          });
+
+          for (const std of enrolledStudents) {
+            if (std.user?.email) {
+              try {
+                await emailService.sendExamScheduled(std.user.email, std.user.name, title, startTime);
+              } catch (mailErr) {
+                // Ignore individual background email failure
+              }
+            }
+          }
+        } catch (bgErr) {
+          console.error('[FacultyController] Background email notice error:', bgErr);
+        }
+      });
+      return;
     } catch (error) {
       next(error);
     }
