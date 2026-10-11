@@ -79,7 +79,6 @@ async function backfillFacultyEmployeeIds() {
   }
 }
 
-import { seedAdlinData } from './scripts/seedAdlin50Questions';
 import { seedExamsForAllQuestions } from './scripts/seedAllQuestionsExams';
 import { setup12SubjectsAndCategorize } from './scripts/setup12SubjectsAndCategorize';
 
@@ -87,7 +86,6 @@ async function initDb() {
   await cleanupSeededData();
   await importGoogleDriveQuestions();
   await seedQuantitativeAptitudeQuestions();
-  await seedAdlinData();
   await backfillFacultyEmployeeIds();
   await setup12SubjectsAndCategorize();
   await seedExamsForAllQuestions();
