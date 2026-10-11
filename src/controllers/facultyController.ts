@@ -822,12 +822,14 @@ export const FacultyController = {
     }
   },
 
-  // 6. Get Exam Results for Faculty grading view
+  // 6. Get Exam Results for Faculty grading view & Admin evaluation
   getResults: async (req: AuthRequest, res: Response, next: NextFunction) => {
     try {
+      const isAdmin = req.user?.role === 'admin';
       let facultyCollegeId: string | undefined = undefined;
       let facultyId: string | undefined = undefined;
-      if (req.user) {
+
+      if (!isAdmin && req.user) {
         const faculty = await prisma.faculty.findFirst({ where: { userId: req.user.id } });
         if (faculty) {
           facultyCollegeId = faculty.collegeId || undefined;
@@ -835,114 +837,279 @@ export const FacultyController = {
         }
       }
 
+      // Query filters (supported for both Admin and Faculty)
+      const qExamId = typeof req.query.examId === 'string' && req.query.examId ? req.query.examId : undefined;
+      const qCollegeId = typeof req.query.collegeId === 'string' && req.query.collegeId ? req.query.collegeId : undefined;
+      const qDepartmentId = typeof req.query.departmentId === 'string' && req.query.departmentId ? req.query.departmentId : undefined;
+
+      // Base student/exam filters
+      const examFilter: any = {};
+      const studentFilter: any = {};
+
+      if (qExamId) examFilter.id = qExamId;
+      if (qCollegeId) {
+        studentFilter.collegeId = qCollegeId;
+      } else if (facultyCollegeId) {
+        studentFilter.collegeId = facultyCollegeId;
+      }
+      if (qDepartmentId) studentFilter.departmentId = qDepartmentId;
+
+      if (!isAdmin && facultyId && !facultyCollegeId) {
+        examFilter.facultyId = facultyId;
+      }
+
+      const resultsWhere: any = {};
+      if (Object.keys(examFilter).length > 0) resultsWhere.exam = examFilter;
+      if (Object.keys(studentFilter).length > 0) resultsWhere.student = studentFilter;
+
+      // 1. Fetch from Result table
       const results = await prisma.result.findMany({
-        where: facultyCollegeId ? {
-          student: { collegeId: facultyCollegeId }
-        } : (facultyId ? {
-          exam: { facultyId }
-        } : {}),
+        where: resultsWhere,
         include: {
-          student: { include: { user: true, department: true, college: true } },
+          student: { include: { user: true, department: true, college: true, course: true } },
           exam: {
             include: {
               college: true,
               subject: true,
-              examQuestions: { include: { question: true } }
+              department: true,
+              examQuestions: {
+                include: {
+                  question: {
+                    include: { options: true }
+                  }
+                }
+              }
             }
           }
         },
         orderBy: { id: 'desc' }
       });
 
+      // 2. Fetch all studentExam attempts (to ensure NO attended student is missed)
+      const seWhere: any = {};
+      if (Object.keys(examFilter).length > 0) seWhere.exam = examFilter;
+      if (Object.keys(studentFilter).length > 0) seWhere.student = studentFilter;
+
       const studentExams = await prisma.studentExam.findMany({
-        where: {
-          examId: { in: results.map((r: any) => r.examId) },
-          studentId: { in: results.map((r: any) => r.studentId) }
-        },
+        where: seWhere,
         include: {
+          student: { include: { user: true, department: true, college: true, course: true } },
+          exam: {
+            include: {
+              college: true,
+              subject: true,
+              department: true,
+              examQuestions: {
+                include: {
+                  question: {
+                    include: { options: true }
+                  }
+                }
+              }
+            }
+          },
           studentAnswers: true
-        }
+        },
+        orderBy: { startedAt: 'desc' }
       });
 
+      // Index results and studentExams
       const seMap = new Map<string, any>();
       studentExams.forEach((se: any) => {
         seMap.set(`${se.studentId}_${se.examId}`, se);
       });
 
-      // Mapped response matching frontend
-      const mapped = results.map((r: any) => {
-        const se = seMap.get(`${r.studentId}_${r.examId}`);
-        const totalEqs = (r.exam?.examQuestions || []).filter((eq: any) => eq && eq.question).length;
-        const totalPoints = totalEqs > 0
-          ? Math.round(totalEqs * (r.exam?.marksPerQuestion || 1))
-          : (r.exam?.totalMarks || 10);
+      const resMap = new Map<string, any>();
+      results.forEach((r: any) => {
+        resMap.set(`${r.studentId}_${r.examId}`, r);
+      });
 
-        let rawScore = Math.round((r.percentage / 100) * totalPoints);
-        if (se && typeof se.score === 'number' && se.score > 0) {
-          rawScore = Math.round(se.score);
+      // Combine unique student-exam keys from both collections
+      const allKeys = new Set<string>([...resMap.keys(), ...seMap.keys()]);
+
+      const mapped: any[] = [];
+
+      for (const key of allKeys) {
+        const r = resMap.get(key);
+        const se = seMap.get(key);
+
+        const exam = r?.exam || se?.exam;
+        const student = r?.student || se?.student;
+
+        if (!exam || !student) continue;
+
+        const totalEqs = (exam.examQuestions || []).filter((eq: any) => eq && eq.question).length;
+        const marksPerQ = exam.marksPerQuestion && exam.marksPerQuestion > 0 ? exam.marksPerQuestion : 1;
+        const negMarks = exam.negativeMarking ? (exam.negativeMarks || 0) : 0;
+        const countLimit = (exam.questionCount && exam.questionCount > 0)
+          ? Math.min(exam.questionCount, totalEqs || exam.questionCount)
+          : (totalEqs || 10);
+        const totalPoints = Math.round(countLimit * marksPerQ) || exam.totalMarks || 100;
+        const passThreshold = exam.passPercentage || 40;
+
+        // Build question option lookup for precise answer verification
+        const qMap = new Map<string, any>();
+        (exam.examQuestions || []).forEach((eq: any) => {
+          if (eq?.question?.id) {
+            qMap.set(eq.question.id, eq.question);
+          }
+        });
+
+        let correctCount = 0;
+        let wrongCount = 0;
+        let skippedCount = 0;
+        let calculatedScore = 0;
+        let hasEvaluatedAnswers = false;
+
+        if (se && Array.isArray(se.studentAnswers) && se.studentAnswers.length > 0) {
+          hasEvaluatedAnswers = true;
+          se.studentAnswers.forEach((ans: any) => {
+            const hasAnswer = (ans.selectedOption !== null && ans.selectedOption !== '') ||
+                              (ans.answerText !== null && ans.answerText !== '');
+            if (!hasAnswer) {
+              skippedCount++;
+              return;
+            }
+
+            let isCorrect = ans.marksAwarded > 0;
+            // Cross-check against question options
+            if (!isCorrect && qMap.has(ans.questionId)) {
+              const q = qMap.get(ans.questionId);
+              const sortedOptions = [...(q.options || [])].sort((a: any, b: any) => (a.id || '').localeCompare(b.id || ''));
+              if (q.type === 'mcq' && ans.selectedOption !== null) {
+                const optIdx = Number(ans.selectedOption);
+                if (!isNaN(optIdx) && optIdx >= 0 && optIdx < sortedOptions.length) {
+                  isCorrect = Boolean(sortedOptions[optIdx]?.isCorrect);
+                } else {
+                  const matched = sortedOptions.find((o: any) => o.option && o.option.trim().toLowerCase() === String(ans.selectedOption).trim().toLowerCase());
+                  isCorrect = Boolean(matched?.isCorrect);
+                }
+              } else if (q.type === 'checkbox' && ans.selectedOption !== null) {
+                const parts = String(ans.selectedOption).split(',').sort();
+                const correctIndices = sortedOptions
+                  .map((o: any, idx: number) => (o.isCorrect ? String(idx) : null))
+                  .filter((x: any): x is string => x !== null)
+                  .sort();
+                isCorrect = JSON.stringify(parts) === JSON.stringify(correctIndices);
+              }
+            }
+
+            if (isCorrect) {
+              correctCount++;
+              calculatedScore += marksPerQ;
+            } else {
+              wrongCount++;
+              if (negMarks > 0) calculatedScore -= negMarks;
+            }
+          });
+
+          const totalQ = totalEqs || countLimit;
+          if (totalQ > (correctCount + wrongCount + skippedCount)) {
+            skippedCount += (totalQ - (correctCount + wrongCount + skippedCount));
+          }
         }
+
+        let rawScore = 0;
+        if (hasEvaluatedAnswers) {
+          rawScore = Math.max(0, Math.round(calculatedScore));
+        } else if (se && typeof se.score === 'number' && se.score >= 0) {
+          rawScore = Math.max(0, Math.round(se.score));
+          correctCount = Math.min(countLimit, Math.max(0, Math.round(rawScore / marksPerQ)));
+          wrongCount = Math.max(0, countLimit - correctCount);
+          skippedCount = 0;
+        } else if (r && typeof r.percentage === 'number') {
+          // Fallback if no attempt or answers exist at all
+          rawScore = Math.round((r.percentage / 100) * totalPoints);
+          correctCount = Math.min(countLimit, Math.max(0, Math.round(rawScore / marksPerQ)));
+          wrongCount = Math.max(0, countLimit - correctCount);
+          skippedCount = 0;
+        }
+
+        // CRITICAL INTEGRITY CHECK:
+        // If correctCount is 0, score CANNOT be positive!
+        if (correctCount === 0) {
+          rawScore = 0;
+        }
+
+        const percentage = totalPoints > 0
+          ? Math.min(100, Math.max(0, Math.round((rawScore / totalPoints) * 100)))
+          : 0;
+
+        const status = (percentage >= passThreshold && rawScore > 0) ? 'pass' : 'fail';
 
         let timeTakenSeconds = 0;
         if (se && se.submittedAt && se.startedAt) {
           timeTakenSeconds = Math.max(1, Math.round((new Date(se.submittedAt).getTime() - new Date(se.startedAt).getTime()) / 1000));
+        } else if (se?.startedAt) {
+          timeTakenSeconds = Math.max(1, Math.round((new Date().getTime() - new Date(se.startedAt).getTime()) / 1000));
         }
 
         const submissionDate = (se && se.submittedAt)
           ? se.submittedAt.toISOString()
-          : (r.exam?.endDate ? r.exam.endDate.toISOString() : new Date().toISOString());
+          : (r?.exam?.endDate ? r.exam.endDate.toISOString() : (exam.endDate ? exam.endDate.toISOString() : new Date().toISOString()));
 
-        // Calculate correct answers, wrong answers, and skipped questions
-        let correctCount = 0;
-        let wrongCount = 0;
-        let skippedCount = 0;
-
-        if (se && Array.isArray(se.studentAnswers) && se.studentAnswers.length > 0) {
-          se.studentAnswers.forEach((ans: any) => {
-            const hasAnswer = (ans.selectedOption !== null && ans.selectedOption !== '') ||
-                              (ans.answerText !== null && ans.answerText !== '');
-            if (ans.marksAwarded > 0) {
-              correctCount++;
-            } else if (hasAnswer) {
-              wrongCount++;
-            } else {
-              skippedCount++;
+        // Auto-heal DB Result table in background if discrepancy is present
+        if (r && (r.percentage !== percentage || r.status !== status)) {
+          prisma.result.update({
+            where: { id: r.id },
+            data: {
+              percentage,
+              status,
+              grade: percentage >= 90 ? 'A+' : percentage >= 80 ? 'A' : percentage >= 60 ? 'B' : percentage >= 40 ? 'C' : 'F'
             }
-          });
-          const totalQ = totalEqs || (r.exam?.questionCount ?? 0);
-          if (totalQ > (correctCount + wrongCount + skippedCount)) {
-            skippedCount += (totalQ - (correctCount + wrongCount + skippedCount));
-          }
-        } else {
-          // Fallback if individual studentAnswers rows aren't present
-          const marksPerQ = r.exam?.marksPerQuestion || 1;
-          const totalQ = totalEqs > 0 ? totalEqs : (r.exam?.questionCount || 10);
-          correctCount = Math.min(totalQ, Math.max(0, Math.round(rawScore / marksPerQ)));
-          wrongCount = Math.max(0, totalQ - correctCount);
-          skippedCount = 0;
+          }).catch(() => {});
+        } else if (!r && student.id && exam.id) {
+          prisma.result.upsert({
+            where: {
+              studentId_examId: { studentId: student.id, examId: exam.id }
+            },
+            create: {
+              studentId: student.id,
+              examId: exam.id,
+              percentage,
+              status,
+              grade: percentage >= 90 ? 'A+' : percentage >= 80 ? 'A' : percentage >= 60 ? 'B' : percentage >= 40 ? 'C' : 'F'
+            },
+            update: {
+              percentage,
+              status,
+              grade: percentage >= 90 ? 'A+' : percentage >= 80 ? 'A' : percentage >= 60 ? 'B' : percentage >= 40 ? 'C' : 'F'
+            }
+          }).catch(() => {});
         }
 
-        return {
-          id: r.id,
-          examId: r.examId,
-          examTitle: r.exam?.title || 'Examination',
-          subjectName: r.exam?.subject ? r.exam.subject.subjectName : 'General Evaluation',
-          collegeName: r.student?.college?.collegeName || r.exam?.college?.collegeName || 'N/A',
-          studentId: r.student?.user?.id || '',
-          studentName: r.student?.user?.name || 'Student',
-          studentRollNo: r.student?.registerNumber || '',
-          departmentName: r.student?.department?.departmentName || 'General',
-          studentDepartment: r.student?.department?.departmentName || 'General',
+        if (se && se.score !== rawScore) {
+          prisma.studentExam.update({
+            where: { id: se.id },
+            data: { score: rawScore }
+          }).catch(() => {});
+        }
+
+        mapped.push({
+          id: r?.id || se?.id || `attempt_${student.id}_${exam.id}`,
+          examId: exam.id,
+          examTitle: exam.title || 'Examination',
+          subjectName: exam.subject ? exam.subject.subjectName : 'General Evaluation',
+          collegeName: student.college?.collegeName || exam.college?.collegeName || 'N/A',
+          studentId: student.user?.id || student.id || '',
+          studentName: student.user?.name || 'Student',
+          studentRollNo: student.registerNumber || '',
+          departmentName: student.department?.departmentName || 'General',
+          studentDepartment: student.department?.departmentName || 'General',
           score: rawScore,
           totalPoints,
-          percentage: r.percentage,
-          status: r.status,
+          percentage,
+          status,
           timeTaken: timeTakenSeconds,
           correctCount,
           wrongCount,
           skippedCount,
           submittedAt: submissionDate
-        };
-      });
+        });
+      }
+
+      // Sort by submission date descending (newest first)
+      mapped.sort((a, b) => new Date(b.submittedAt).getTime() - new Date(a.submittedAt).getTime());
 
       return res.status(200).json(mapped);
     } catch (error) {

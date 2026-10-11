@@ -69,5 +69,6 @@ router.get('/uploaded-qpapers', FacultyController.getUploadedQPapers);
 router.get('/uploaded-qpapers/:id/questions', FacultyController.getQPaperQuestions);
 router.delete('/uploaded-qpapers/:id', FacultyController.deleteUploadedQPaper);
 router.post('/questions/generate-ai', FacultyController.generateAIQuestions);
+router.get('/results', FacultyController.getResults);
 
 export default router;

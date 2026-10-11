@@ -319,8 +319,9 @@ export const StudentController = {
         });
       }
 
+      const sortedExamQuestions = [...(exam.examQuestions || [])].sort((a: any, b: any) => (a.id || '').localeCompare(b.id || ''));
       const seedStr = `${student.id}-${exam.id}`;
-      const shuffledEqs = pseudoRandomShuffle(exam.examQuestions || [], seedStr);
+      const shuffledEqs = pseudoRandomShuffle(sortedExamQuestions, seedStr);
       const validEqs = shuffledEqs.filter((eq: any) => eq && eq.question);
       const countLimit = exam.questionCount && exam.questionCount > 0 ? exam.questionCount : validEqs.length;
       const selectedEqs = validEqs.slice(0, countLimit);
@@ -462,8 +463,9 @@ export const StudentController = {
       }
 
       // Deterministic question subset for this student attempt (MUST MATCH getExams)
+      const sortedExamQuestions = [...(exam.examQuestions || [])].sort((a: any, b: any) => (a.id || '').localeCompare(b.id || ''));
       const seedStr = `${student.id}-${exam.id}`;
-      const shuffledEqs = pseudoRandomShuffle(exam.examQuestions || [], seedStr);
+      const shuffledEqs = pseudoRandomShuffle(sortedExamQuestions, seedStr);
       const validEqs = shuffledEqs.filter((eq: any) => eq && eq.question);
       const countLimit = exam.questionCount && exam.questionCount > 0
         ? Math.min(exam.questionCount, validEqs.length)
@@ -548,8 +550,8 @@ export const StudentController = {
         await prisma.studentAnswer.createMany({ data: answerInserts });
       }
 
-      // Clip final score at 0
-      const finalScore = Math.max(0, score);
+      // Clip final score at 0; if 0 answers were correct, score must be 0
+      const finalScore = correctCount === 0 ? 0 : Math.max(0, score);
 
       // Update StudentExam status and raw score
       await prisma.studentExam.update({
@@ -563,8 +565,11 @@ export const StudentController = {
         ? Math.round(evaluatedQuestionCount * marksPerQ)
         : (exam.totalMarks || 10);
 
-      const percentage = Math.max(0, Math.round((finalScore / totalPoints) * 100));
-      const status = percentage >= 40 ? 'pass' : 'fail';
+      const percentage = (totalPoints > 0 && finalScore > 0)
+        ? Math.min(100, Math.max(0, Math.round((finalScore / totalPoints) * 100)))
+        : 0;
+      const passThreshold = (exam as any).passPercentage || 40;
+      const status = (percentage >= passThreshold && finalScore > 0) ? 'pass' : 'fail';
 
       // 3. Upsert Result record (safe against duplicate submissions)
       const result = await prisma.result.upsert({
