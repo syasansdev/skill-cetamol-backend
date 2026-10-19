@@ -3,6 +3,7 @@ import bcrypt from 'bcrypt';
 import prisma from '../config/db';
 import { emailService } from '../services/emailService';
 import { AuthRequest } from '../middleware/auth';
+import { getAssignedExamQuestions, evaluateExamAnswers } from '../utils/examUtils';
 
 export const AdminController = {
   // 1. Get Users Registry

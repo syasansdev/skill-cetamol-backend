@@ -6,6 +6,7 @@ import { emailService } from '../services/emailService';
 import { AuthRequest } from '../middleware/auth';
 import { Question } from '@prisma/client';
 import { Extractor } from '../utils/extractor';
+import { getAssignedExamQuestions, evaluateExamAnswers } from '../utils/examUtils';
 
 const formatPhotoUrl = (req: Request, url?: string | null) => {
   if (!url) return undefined;
@@ -938,104 +939,25 @@ export const FacultyController = {
 
         if (!exam || !student) continue;
 
-        const totalEqs = (exam.examQuestions || []).filter((eq: any) => eq && eq.question).length;
-        const marksPerQ = exam.marksPerQuestion && exam.marksPerQuestion > 0 ? exam.marksPerQuestion : 1;
-        const negMarks = exam.negativeMarking ? (exam.negativeMarks || 0) : 0;
-        const countLimit = (exam.questionCount && exam.questionCount > 0)
-          ? Math.min(exam.questionCount, totalEqs || exam.questionCount)
-          : (totalEqs || 10);
-        const totalPoints = Math.round(countLimit * marksPerQ) || exam.totalMarks || 100;
-        const passThreshold = exam.passPercentage || 40;
-
-        // Build question option lookup for precise answer verification
-        const qMap = new Map<string, any>();
-        (exam.examQuestions || []).forEach((eq: any) => {
-          if (eq?.question?.id) {
-            qMap.set(eq.question.id, eq.question);
-          }
-        });
-
-        let correctCount = 0;
-        let wrongCount = 0;
-        let skippedCount = 0;
-        let calculatedScore = 0;
-        let hasEvaluatedAnswers = false;
-
-        if (se && Array.isArray(se.studentAnswers) && se.studentAnswers.length > 0) {
-          hasEvaluatedAnswers = true;
+        const ansMap: Record<string, any> = {};
+        if (se && Array.isArray(se.studentAnswers)) {
           se.studentAnswers.forEach((ans: any) => {
-            const hasAnswer = (ans.selectedOption !== null && ans.selectedOption !== '') ||
-                              (ans.answerText !== null && ans.answerText !== '');
-            if (!hasAnswer) {
-              skippedCount++;
-              return;
-            }
-
-            let isCorrect = ans.marksAwarded > 0;
-            // Cross-check against question options
-            if (!isCorrect && qMap.has(ans.questionId)) {
-              const q = qMap.get(ans.questionId);
-              const sortedOptions = [...(q.options || [])].sort((a: any, b: any) => (a.id || '').localeCompare(b.id || ''));
-              if (q.type === 'mcq' && ans.selectedOption !== null) {
-                const optIdx = Number(ans.selectedOption);
-                if (!isNaN(optIdx) && optIdx >= 0 && optIdx < sortedOptions.length) {
-                  isCorrect = Boolean(sortedOptions[optIdx]?.isCorrect);
-                } else {
-                  const matched = sortedOptions.find((o: any) => o.option && o.option.trim().toLowerCase() === String(ans.selectedOption).trim().toLowerCase());
-                  isCorrect = Boolean(matched?.isCorrect);
-                }
-              } else if (q.type === 'checkbox' && ans.selectedOption !== null) {
-                const parts = String(ans.selectedOption).split(',').sort();
-                const correctIndices = sortedOptions
-                  .map((o: any, idx: number) => (o.isCorrect ? String(idx) : null))
-                  .filter((x: any): x is string => x !== null)
-                  .sort();
-                isCorrect = JSON.stringify(parts) === JSON.stringify(correctIndices);
-              }
-            }
-
-            if (isCorrect) {
-              correctCount++;
-              calculatedScore += marksPerQ;
-            } else {
-              wrongCount++;
-              if (negMarks > 0) calculatedScore -= negMarks;
+            if (ans.selectedOption !== null && ans.selectedOption !== '') {
+              ansMap[ans.questionId] = ans.selectedOption.includes(',') ? ans.selectedOption.split(',') : ans.selectedOption;
+            } else if (ans.answerText !== null && ans.answerText !== '') {
+              ansMap[ans.questionId] = ans.answerText;
             }
           });
-
-          const totalQ = totalEqs || countLimit;
-          if (totalQ > (correctCount + wrongCount + skippedCount)) {
-            skippedCount += (totalQ - (correctCount + wrongCount + skippedCount));
-          }
         }
 
-        let rawScore = 0;
-        if (hasEvaluatedAnswers) {
-          rawScore = Math.max(0, Math.round(calculatedScore));
-        } else if (se && typeof se.score === 'number' && se.score >= 0) {
-          rawScore = Math.max(0, Math.round(se.score));
-          correctCount = Math.min(countLimit, Math.max(0, Math.round(rawScore / marksPerQ)));
-          wrongCount = Math.max(0, countLimit - correctCount);
-          skippedCount = 0;
-        } else if (r && typeof r.percentage === 'number') {
-          // Fallback if no attempt or answers exist at all
-          rawScore = Math.round((r.percentage / 100) * totalPoints);
-          correctCount = Math.min(countLimit, Math.max(0, Math.round(rawScore / marksPerQ)));
-          wrongCount = Math.max(0, countLimit - correctCount);
-          skippedCount = 0;
-        }
-
-        // CRITICAL INTEGRITY CHECK:
-        // If correctCount is 0, score CANNOT be positive!
-        if (correctCount === 0) {
-          rawScore = 0;
-        }
-
-        const percentage = totalPoints > 0
-          ? Math.min(100, Math.max(0, Math.round((rawScore / totalPoints) * 100)))
-          : 0;
-
-        const status = (percentage >= passThreshold && rawScore > 0) ? 'pass' : 'fail';
+        const evalRes = evaluateExamAnswers(exam, student.id, ansMap);
+        const correctCount = evalRes.correctCount;
+        const wrongCount = evalRes.wrongCount;
+        const skippedCount = evalRes.skippedCount;
+        const rawScore = evalRes.score;
+        const totalPoints = evalRes.totalPoints;
+        const percentage = evalRes.percentage;
+        const status = evalRes.status;
 
         let timeTakenSeconds = 0;
         if (se && se.submittedAt && se.startedAt) {

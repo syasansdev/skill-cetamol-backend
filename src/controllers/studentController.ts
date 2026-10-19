@@ -3,30 +3,8 @@ import prisma from '../config/db';
 import { emailService } from '../services/emailService';
 import { AuthRequest } from '../middleware/auth';
 
-function cleanQuestionText(text: string): string {
-  if (!text) return '';
-  return text.replace(/^(?:q(?:uestion)?\s*\d+[\s.:)\-–—]+|\d+\s*[\.\)]\s+)/i, '').trim();
-}
-
-// Helper function for deterministic shuffle based on seed
-function pseudoRandomShuffle<T>(array: T[], seedStr: string): T[] {
-  const result = [...array];
-  let seed = 0;
-  for (let i = 0; i < seedStr.length; i++) {
-    seed = (seed << 5) - seed + seedStr.charCodeAt(i);
-    seed |= 0;
-  }
-  seed = Math.abs(seed);
-  let m = result.length, t, i;
-  while (m) {
-    seed = (seed * 9301 + 49297) % 233280;
-    i = Math.floor((seed / 233280) * m--);
-    t = result[m];
-    result[m] = result[i];
-    result[i] = t;
-  }
-  return result;
-}
+import { cleanQuestionText, pseudoRandomShuffle, getAssignedExamQuestions, evaluateExamAnswers } from '../utils/examUtils';
+export { cleanQuestionText, pseudoRandomShuffle, getAssignedExamQuestions };
 
 export const StudentController = {
   // 1. Get Exams for Student Dashboard
@@ -141,20 +119,14 @@ export const StudentController = {
           });
         }
 
-        // Randomize questions for this student attempt (stable per student + exam)
-        const seedStr = `${student.id}-${exam.id}`;
-        const shuffledEqs = pseudoRandomShuffle(exam.examQuestions || [], seedStr);
-        const validEqs = shuffledEqs.filter((eq: any) => eq && eq.question);
-        const countLimit = exam.questionCount && exam.questionCount > 0 ? exam.questionCount : validEqs.length;
-        const selectedEqs = validEqs.slice(0, countLimit);
-
-
+        // Deterministic question assignment for this student attempt (consistent with submit & results)
+        const selectedEqs = getAssignedExamQuestions(exam, student.id);
 
         const questionsMapped = selectedEqs.map((eq: any) => {
           const q = eq.question;
 
           let correctAnswer: string | string[] = '0';
-          const optionsList = [...(q.options || [])].sort((a, b) => a.id.localeCompare(b.id));
+          const optionsList = [...(q.options || [])].sort((a, b) => (a.id || '').localeCompare(b.id || ''));
           if (q.type === 'mcq') {
             const idx = optionsList.findIndex(o => o.isCorrect);
             correctAnswer = idx >= 0 ? String(idx) : '0';
@@ -318,18 +290,13 @@ export const StudentController = {
           }
         });
       }
-
-      const sortedExamQuestions = [...(exam.examQuestions || [])].sort((a: any, b: any) => (a.id || '').localeCompare(b.id || ''));
-      const seedStr = `${student.id}-${exam.id}`;
-      const shuffledEqs = pseudoRandomShuffle(sortedExamQuestions, seedStr);
-      const validEqs = shuffledEqs.filter((eq: any) => eq && eq.question);
-      const countLimit = exam.questionCount && exam.questionCount > 0 ? exam.questionCount : validEqs.length;
-      const selectedEqs = validEqs.slice(0, countLimit);
+      // Deterministic question assignment for this student attempt (consistent with getExams & submitExam)
+      const selectedEqs = getAssignedExamQuestions(exam, student.id);
 
       const questionsMapped = selectedEqs.map((eq: any) => {
         const q = eq.question;
         let correctAnswer: string | string[] = '0';
-        const optionsList = [...(q.options || [])].sort((a, b) => a.id.localeCompare(b.id));
+        const optionsList = [...(q.options || [])].sort((a, b) => (a.id || '').localeCompare(b.id || ''));
         if (q.type === 'mcq') {
           const idx = optionsList.findIndex(o => o.isCorrect);
           correctAnswer = idx >= 0 ? String(idx) : '0';
@@ -446,8 +413,6 @@ export const StudentController = {
       });
 
       const submittedAnswers = answers || {};
-      const marksPerQ = exam.marksPerQuestion || 1;
-      const negMarks = exam.negativeMarking ? (exam.negativeMarks || 0) : 0;
 
       // 1. Create or update StudentExam log
       let studentExam = existingAttempt;
@@ -462,83 +427,27 @@ export const StudentController = {
         });
       }
 
-      // Deterministic question subset for this student attempt (MUST MATCH getExams)
-      const sortedExamQuestions = [...(exam.examQuestions || [])].sort((a: any, b: any) => (a.id || '').localeCompare(b.id || ''));
-      const seedStr = `${student.id}-${exam.id}`;
-      const shuffledEqs = pseudoRandomShuffle(sortedExamQuestions, seedStr);
-      const validEqs = shuffledEqs.filter((eq: any) => eq && eq.question);
-      const countLimit = exam.questionCount && exam.questionCount > 0
-        ? Math.min(exam.questionCount, validEqs.length)
-        : validEqs.length;
-      const assignedEqs = validEqs.slice(0, countLimit);
-
-      let score = 0;
-      let correctCount = 0;
-      let wrongCount = 0;
-      let skippedCount = 0;
-      const answerInserts = [];
-
-      for (const eq of assignedEqs) {
-        const q = eq.question;
-        const studentAns = submittedAnswers[q.id];
-
-        let isCorrect = false;
-        let selectedOption = null;
-        let answerText = null;
-        let marksAwarded = 0;
-
-        if (studentAns === undefined || studentAns === '' || (Array.isArray(studentAns) && studentAns.length === 0)) {
-          skippedCount++;
-        } else {
-          const sortedOptions = [...(q.options || [])].sort((a, b) => a.id.localeCompare(b.id));
-
-          if (q.type === 'mcq') {
-            selectedOption = String(studentAns);
-            const selectedOptIdx = Number(studentAns);
-            if (!isNaN(selectedOptIdx) && selectedOptIdx >= 0 && selectedOptIdx < sortedOptions.length) {
-              const selectedOptionObj = sortedOptions[selectedOptIdx];
-              isCorrect = Boolean(selectedOptionObj && selectedOptionObj.isCorrect);
-            } else {
-              const matchedOptionObj = sortedOptions.find(o => o.option.trim().toLowerCase() === String(studentAns).trim().toLowerCase());
-              isCorrect = Boolean(matchedOptionObj && matchedOptionObj.isCorrect);
-            }
-          } else if (q.type === 'checkbox') {
-            const studentIndices = Array.isArray(studentAns) ? studentAns.map(String).sort() : [String(studentAns)];
-            selectedOption = studentIndices.join(',');
-
-            const correctIndices = sortedOptions
-              .map((o, idx) => (o.isCorrect ? String(idx) : null))
-              .filter((x): x is string => x !== null)
-              .sort();
-
-            isCorrect = JSON.stringify(studentIndices) === JSON.stringify(correctIndices);
-          } else if (q.type === 'text') {
-            answerText = String(studentAns);
-            const studentText = answerText.trim().toLowerCase();
-            isCorrect = studentText.length > 0;
-          }
-
-          if (isCorrect) {
-            score += marksPerQ;
-            correctCount++;
-            marksAwarded = marksPerQ;
-          } else {
-            wrongCount++;
-            if (negMarks > 0) {
-              score -= negMarks;
-              marksAwarded = -negMarks;
-            }
+      // Pre-populate with auto-saved answers if any
+      const existingDbAnswers = await prisma.studentAnswer.findMany({
+        where: { studentExamId: studentExam.id }
+      });
+      const mergedAnswers: Record<string, any> = {};
+      for (const ea of existingDbAnswers) {
+        if (ea.selectedOption !== null && ea.selectedOption !== '') {
+          mergedAnswers[ea.questionId] = ea.selectedOption.includes(',') ? ea.selectedOption.split(',') : ea.selectedOption;
+        } else if (ea.answerText !== null && ea.answerText !== '') {
+          mergedAnswers[ea.questionId] = ea.answerText;
+        }
+      }
+      if (answers && typeof answers === 'object') {
+        for (const [k, v] of Object.entries(answers)) {
+          if (v !== undefined && v !== '' && (!Array.isArray(v) || v.length > 0)) {
+            mergedAnswers[k] = v;
           }
         }
-
-        answerInserts.push({
-          studentExamId: studentExam.id,
-          questionId: q.id,
-          selectedOption,
-          answerText,
-          marksAwarded
-        });
       }
+
+      const evalResult = evaluateExamAnswers(exam, student.id, mergedAnswers, studentExam.id);
 
       // Clear any existing saved answers from auto-save to prevent duplicate records
       await prisma.studentAnswer.deleteMany({
@@ -546,30 +455,15 @@ export const StudentController = {
       });
 
       // Save StudentAnswers details
-      if (answerInserts.length > 0) {
-        await prisma.studentAnswer.createMany({ data: answerInserts });
+      if (evalResult.answerInserts.length > 0) {
+        await prisma.studentAnswer.createMany({ data: evalResult.answerInserts });
       }
-
-      // Clip final score at 0; if 0 answers were correct, score must be 0
-      const finalScore = correctCount === 0 ? 0 : Math.max(0, score);
 
       // Update StudentExam status and raw score
       await prisma.studentExam.update({
         where: { id: studentExam.id },
-        data: { score: finalScore, status: 'submitted', submittedAt: new Date() }
+        data: { score: evalResult.score, status: 'submitted', submittedAt: new Date() }
       });
-
-      // Calculate total exam points accurately based on evaluated questions
-      const evaluatedQuestionCount = assignedEqs.length;
-      const totalPoints = evaluatedQuestionCount > 0
-        ? Math.round(evaluatedQuestionCount * marksPerQ)
-        : (exam.totalMarks || 10);
-
-      const percentage = (totalPoints > 0 && finalScore > 0)
-        ? Math.min(100, Math.max(0, Math.round((finalScore / totalPoints) * 100)))
-        : 0;
-      const passThreshold = (exam as any).passPercentage || 40;
-      const status = (percentage >= passThreshold && finalScore > 0) ? 'pass' : 'fail';
 
       // 3. Upsert Result record (safe against duplicate submissions)
       const result = await prisma.result.upsert({
@@ -580,16 +474,16 @@ export const StudentController = {
           }
         },
         update: {
-          percentage,
-          status,
-          grade: percentage >= 90 ? 'A+' : percentage >= 80 ? 'A' : percentage >= 60 ? 'B' : percentage >= 40 ? 'C' : 'F'
+          percentage: evalResult.percentage,
+          status: evalResult.status,
+          grade: evalResult.percentage >= 90 ? 'A+' : evalResult.percentage >= 80 ? 'A' : evalResult.percentage >= 60 ? 'B' : evalResult.percentage >= 40 ? 'C' : 'F'
         },
         create: {
           studentId: student.id,
           examId: exam.id,
-          percentage,
-          status,
-          grade: percentage >= 90 ? 'A+' : percentage >= 80 ? 'A' : percentage >= 60 ? 'B' : percentage >= 40 ? 'C' : 'F'
+          percentage: evalResult.percentage,
+          status: evalResult.status,
+          grade: evalResult.percentage >= 90 ? 'A+' : evalResult.percentage >= 80 ? 'A' : evalResult.percentage >= 60 ? 'B' : evalResult.percentage >= 40 ? 'C' : 'F'
         }
       });
 
@@ -611,7 +505,7 @@ export const StudentController = {
 
       // Dispatch score notification email
       try {
-        await emailService.sendResultPublished(student.user.email, student.user.name, exam.title, score, totalPoints);
+        await emailService.sendResultPublished(student.user.email, student.user.name, exam.title, evalResult.score, evalResult.totalPoints);
       } catch (mailErr) {
         console.error('Nodemailer evaluation mail failed:', mailErr);
       }
@@ -625,16 +519,16 @@ export const StudentController = {
         studentId: student.user.id,
         studentName: student.user.name,
         studentRollNo: student.registerNumber,
-        score,
-        totalPoints,
-        totalQuestions: evaluatedQuestionCount,
-        percentage,
-        status,
+        score: evalResult.score,
+        totalPoints: evalResult.totalPoints,
+        totalQuestions: evalResult.assignedEqs.length,
+        percentage: evalResult.percentage,
+        status: evalResult.status,
         answers: submittedAnswers,
         timeTaken,
-        correctCount,
-        wrongCount,
-        skippedCount,
+        correctCount: evalResult.correctCount,
+        wrongCount: evalResult.wrongCount,
+        skippedCount: evalResult.skippedCount,
         submittedAt: new Date().toISOString(),
         rank: rankIdx
       });
@@ -685,15 +579,18 @@ export const StudentController = {
       // Map to frontend response format
       const formatted = results.map((r: any) => {
         const se = seMap.get(r.examId);
-        const totalEqs = (r.exam?.examQuestions || []).filter((eq: any) => eq && eq.question).length;
-        const actualTotalPoints = totalEqs > 0
-          ? Math.round(totalEqs * (r.exam?.marksPerQuestion || 1))
-          : (r.exam?.totalMarks || 10);
-
-        let rawScore = Math.round((r.percentage / 100) * actualTotalPoints);
-        if (se && typeof se.score === 'number' && se.score > 0) {
-          rawScore = Math.round(se.score);
+        const ansMap: Record<string, any> = {};
+        if (se && Array.isArray(se.studentAnswers)) {
+          se.studentAnswers.forEach((ans: any) => {
+            if (ans.selectedOption !== null && ans.selectedOption !== '') {
+              ansMap[ans.questionId] = ans.selectedOption.includes(',') ? ans.selectedOption.split(',') : ans.selectedOption;
+            } else if (ans.answerText !== null && ans.answerText !== '') {
+              ansMap[ans.questionId] = ans.answerText;
+            }
+          });
         }
+
+        const evalRes = evaluateExamAnswers(r.exam, student.id, ansMap);
 
         let timeTakenSeconds = 0;
         if (se && se.submittedAt && se.startedAt) {
@@ -704,34 +601,6 @@ export const StudentController = {
           ? se.submittedAt.toISOString()
           : (r.exam?.endDate ? r.exam.endDate.toISOString() : new Date().toISOString());
 
-        let correctCount = 0;
-        let wrongCount = 0;
-        let skippedCount = 0;
-
-        if (se && Array.isArray(se.studentAnswers) && se.studentAnswers.length > 0) {
-          se.studentAnswers.forEach((ans: any) => {
-            const hasAnswer = (ans.selectedOption !== null && ans.selectedOption !== '') ||
-                              (ans.answerText !== null && ans.answerText !== '');
-            if (ans.marksAwarded > 0) {
-              correctCount++;
-            } else if (hasAnswer) {
-              wrongCount++;
-            } else {
-              skippedCount++;
-            }
-          });
-          const totalQ = totalEqs || (r.exam?.questionCount ?? 0);
-          if (totalQ > (correctCount + wrongCount + skippedCount)) {
-            skippedCount += (totalQ - (correctCount + wrongCount + skippedCount));
-          }
-        } else {
-          const marksPerQ = r.exam?.marksPerQuestion || 1;
-          const totalQ = totalEqs > 0 ? totalEqs : (r.exam?.questionCount || 10);
-          correctCount = Math.min(totalQ, Math.max(0, Math.round(rawScore / marksPerQ)));
-          wrongCount = Math.max(0, totalQ - correctCount);
-          skippedCount = 0;
-        }
-
         return {
           id: r.id,
           examId: r.examId,
@@ -740,14 +609,14 @@ export const StudentController = {
           studentId: req.user!.id,
           studentName: req.user!.email,
           studentRollNo: student.registerNumber,
-          score: rawScore,
-          totalPoints: actualTotalPoints,
-          percentage: r.percentage,
-          status: r.status,
+          score: evalRes.score,
+          totalPoints: evalRes.totalPoints,
+          percentage: evalRes.percentage,
+          status: evalRes.status,
           timeTaken: timeTakenSeconds,
-          correctCount,
-          wrongCount,
-          skippedCount,
+          correctCount: evalRes.correctCount,
+          wrongCount: evalRes.wrongCount,
+          skippedCount: evalRes.skippedCount,
           submittedAt: submissionDate,
           rank: r.rank || 1
         };
@@ -800,86 +669,30 @@ export const StudentController = {
         include: { studentAnswers: true }
       });
 
-      let correctCount = 0;
-      let wrongCount = 0;
-      let skippedCount = 0;
-      const answersMapped: Record<string, string | string[]> = {};
-
-      if (studentExam) {
+      const ansMap: Record<string, any> = {};
+      if (studentExam && Array.isArray(studentExam.studentAnswers)) {
         studentExam.studentAnswers.forEach(ans => {
-          const isCorrect = ans.marksAwarded > 0;
-          if (ans.selectedOption === null && ans.answerText === null) {
-            skippedCount++;
-          } else if (isCorrect) {
-            correctCount++;
-          } else {
-            wrongCount++;
-          }
-
-          if (ans.selectedOption !== null) {
-            const parts = ans.selectedOption.split(',');
-            answersMapped[ans.questionId] = parts.length > 1 ? parts : parts[0];
-          } else if (ans.answerText !== null) {
-            answersMapped[ans.questionId] = ans.answerText;
+          if (ans.selectedOption !== null && ans.selectedOption !== '') {
+            ansMap[ans.questionId] = ans.selectedOption.includes(',') ? ans.selectedOption.split(',') : ans.selectedOption;
+          } else if (ans.answerText !== null && ans.answerText !== '') {
+            ansMap[ans.questionId] = ans.answerText;
           }
         });
       }
 
-      // Deterministic question subset for this student attempt (MUST MATCH getExams & submitExam)
-      const seedStr = `${student.id}-${result.exam.id}`;
-      const shuffledEqs = pseudoRandomShuffle(result.exam.examQuestions || [], seedStr);
-      const validEqs = shuffledEqs.filter((eq: any) => eq && eq.question);
-      const countLimit = result.exam.questionCount && result.exam.questionCount > 0
-        ? Math.min(result.exam.questionCount, validEqs.length)
-        : validEqs.length;
-      const assignedEqs = validEqs.slice(0, countLimit);
+      const evalRes = evaluateExamAnswers(result.exam, student.id, ansMap);
 
-      const detailedQuestions = assignedEqs.map((eq: any) => {
-        const q = eq.question;
-        const studentAns = studentExam?.studentAnswers.find(sa => sa.questionId === q.id);
-
-        let studentOption: string | string[] | null = null;
-        if (studentAns) {
-          if (studentAns.selectedOption !== null) {
-            const parts = studentAns.selectedOption.split(',');
-            studentOption = parts.length > 1 ? parts : parts[0];
-          } else if (studentAns.answerText !== null) {
-            studentOption = studentAns.answerText;
+      // Auto-heal result record if there was a discrepancy
+      if (result.percentage !== evalRes.percentage || result.status !== evalRes.status) {
+        prisma.result.update({
+          where: { id: result.id },
+          data: {
+            percentage: evalRes.percentage,
+            status: evalRes.status,
+            grade: evalRes.percentage >= 90 ? 'A+' : evalRes.percentage >= 80 ? 'A' : evalRes.percentage >= 60 ? 'B' : evalRes.percentage >= 40 ? 'C' : 'F'
           }
-        }
-
-        const sortedOptions = [...(q.options || [])].sort((a, b) => (a.id || '').localeCompare(b.id || ''));
-
-        let correctAnswer: string | string[] = '0';
-        if (q.type === 'mcq') {
-          const idx = sortedOptions.findIndex(o => o.isCorrect);
-          correctAnswer = idx >= 0 ? String(idx) : '0';
-        } else if (q.type === 'checkbox') {
-          correctAnswer = sortedOptions
-            .map((o, idx) => (o.isCorrect ? String(idx) : null))
-            .filter((idx): idx is string => idx !== null);
-        } else {
-          correctAnswer = '';
-        }
-
-        const isCorrect = studentAns ? studentAns.marksAwarded > 0 : false;
-
-        return {
-          id: q.id,
-          text: cleanQuestionText(q.question || ''),
-          type: q.type,
-          options: sortedOptions.map(o => o.option),
-          correctAnswer,
-          studentOption,
-          isCorrect,
-          marksAwarded: studentAns ? studentAns.marksAwarded : 0,
-          difficulty: q.difficulty
-        };
-      });
-
-      const actualTotalPoints = detailedQuestions.length > 0
-        ? Math.round(detailedQuestions.length * (result.exam.marksPerQuestion || 1))
-        : (result.exam.totalMarks || 10);
+        }).catch(() => {});
+      }
 
       const computedTimeTaken = (studentExam && studentExam.submittedAt && studentExam.startedAt)
         ? Math.max(1, Math.round((new Date(studentExam.submittedAt).getTime() - new Date(studentExam.startedAt).getTime()) / 1000))
@@ -897,16 +710,16 @@ export const StudentController = {
         studentId: req.user!.id,
         studentName: req.user!.email,
         studentRollNo: student.registerNumber,
-        score: Math.round((result.percentage / 100) * actualTotalPoints),
-        totalPoints: actualTotalPoints,
-        percentage: result.percentage,
-        status: result.status,
-        answers: answersMapped,
-        detailedQuestions,
+        score: evalRes.score,
+        totalPoints: evalRes.totalPoints,
+        percentage: evalRes.percentage,
+        status: evalRes.status,
+        answers: ansMap,
+        detailedQuestions: evalRes.detailedQuestions,
         timeTaken: computedTimeTaken,
-        correctCount,
-        wrongCount,
-        skippedCount,
+        correctCount: evalRes.correctCount,
+        wrongCount: evalRes.wrongCount,
+        skippedCount: evalRes.skippedCount,
         submittedAt: formattedSubmittedAt,
         rank: result.rank || 1
       });
