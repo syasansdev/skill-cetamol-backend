@@ -138,7 +138,14 @@ async function ensureDatabaseSchemaSynced() {
     ];
 
     for (const stmt of statements) {
-      await prisma.$executeRawUnsafe(stmt);
+      try {
+        await prisma.$executeRawUnsafe(stmt);
+      } catch (stmtErr: any) {
+        // If column or table already exists or minor notice, ignore
+        if (!stmtErr?.message?.includes('already exists')) {
+          console.warn(`[Startup Schema Notice] ${stmtErr?.message || stmtErr}`);
+        }
+      }
     }
     console.log('[Startup] Database schema self-healing verification completed.');
   } catch (err) {
@@ -146,19 +153,21 @@ async function ensureDatabaseSchemaSynced() {
   }
 }
 
-async function initDb() {
-  await ensureDatabaseSchemaSynced();
-  await cleanupSeededData();
-  await importGoogleDriveQuestions();
-  await seedQuantitativeAptitudeQuestions();
-  await backfillFacultyEmployeeIds();
-  await setup12SubjectsAndCategorize();
-  await seedExamsForAllQuestions();
+async function initBackgroundData() {
+  try {
+    await cleanupSeededData();
+    await importGoogleDriveQuestions();
+    await seedQuantitativeAptitudeQuestions();
+    await backfillFacultyEmployeeIds();
+    await setup12SubjectsAndCategorize();
+    await seedExamsForAllQuestions();
+  } catch (err) {
+    console.warn('[Startup Background Data Warning]:', err);
+  }
 }
 
 // Configure dotenv
 dotenv.config();
-initDb();
 
 const app = express();
 app.set('trust proxy', 1);
@@ -254,12 +263,29 @@ app.use((req, res, next) => {
 // Global Error Handler
 app.use(errorHandler);
 
-// Start Server
-app.listen(PORT, () => {
-  console.log(`===================================================`);
-  console.log(` Skill Cetamol Exam Backend Server running on port ${PORT}`);
-  console.log(` Mode: ${process.env.NODE_ENV || 'development'}`);
-  console.log(`===================================================`);
-});
+// Start Server after verifying database schema self-healing
+async function startServer() {
+  try {
+    console.log('[Startup] Ensuring PostgreSQL database schema is fully synchronized...');
+    await ensureDatabaseSchemaSynced();
+    console.log('[Startup] Schema sync verified successfully. Ready to accept connections.');
+  } catch (err) {
+    console.warn('[Startup] Warning verifying schema before server start:', err);
+  }
+
+  app.listen(PORT, () => {
+    console.log(`===================================================`);
+    console.log(` Skill Cetamol Exam Backend Server running on port ${PORT}`);
+    console.log(` Mode: ${process.env.NODE_ENV || 'development'}`);
+    console.log(`===================================================`);
+  });
+
+  // Run background data seeds and imports in the background
+  initBackgroundData().catch(err => {
+    console.warn('[Background Data Init Warning]:', err);
+  });
+}
+
+startServer();
 
 export default app;

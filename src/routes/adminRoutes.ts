@@ -70,8 +70,11 @@ router.use(requireRole(['admin']));
 
 router.get('/users', AdminController.getUsers);
 router.post('/users/:id/approve', AdminController.approveStudent);
+router.put('/users/:id', AdminController.updateFaculty);
 router.delete('/users/:id', AdminController.deleteUser);
 router.post('/faculty', validateBody(createFacultySchema), AdminController.createFaculty);
+router.put('/faculty/:id', AdminController.updateFaculty);
+router.delete('/faculty/:id', AdminController.deleteUser);
 router.post('/faculty/:id/resend-welcome', AdminController.resendFacultyWelcome);
 router.post('/faculty/:id/reset-password', AdminController.resetUserPassword);
 router.post('/reset-database', AdminController.resetDatabase);

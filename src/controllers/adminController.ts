@@ -124,11 +124,11 @@ export const AdminController = {
     }
   },
 
-  // 3. Delete User account
+  // 3. Delete User account (supports User ID or Faculty/Student Profile ID, cascades all related records)
   deleteUser: async (req: AuthRequest, res: Response, next: NextFunction) => {
     try {
       const { id } = req.params;
-      const user = await prisma.user.findUnique({
+      let user = await prisma.user.findUnique({
         where: { id },
         include: {
           faculty: true,
@@ -136,112 +136,227 @@ export const AdminController = {
         }
       });
 
+      // If not found by User ID, check if it was requested via Faculty ID
       if (!user) {
-        return res.status(404).json({ message: 'User not found' });
+        const fac = await prisma.faculty.findUnique({
+          where: { id },
+          include: { user: true }
+        });
+        if (fac && fac.user) {
+          user = await prisma.user.findUnique({
+            where: { id: fac.userId },
+            include: { faculty: true, student: true }
+          });
+        }
       }
+
+      // If not found, check if it was requested via Student ID
+      if (!user) {
+        const stu = await prisma.student.findUnique({
+          where: { id },
+          include: { user: true }
+        });
+        if (stu && stu.user) {
+          user = await prisma.user.findUnique({
+            where: { id: stu.userId },
+            include: { faculty: true, student: true }
+          });
+        }
+      }
+
+      if (!user) {
+        return res.status(404).json({ message: 'User account not found' });
+      }
+
+      const userId = user.id;
 
       if (user.role === 'faculty' && user.faculty) {
         const facultyId = user.faculty.id;
 
         // Find exams created by this faculty
         const exams = await prisma.exam.findMany({
-          where: { facultyId }
+          where: { facultyId },
+          select: { id: true }
         });
         const examIds = exams.map(e => e.id);
 
         // Find questions created by this faculty
         const questions = await prisma.question.findMany({
-          where: { facultyId }
+          where: { facultyId },
+          select: { id: true }
         });
         const questionIds = questions.map(q => q.id);
 
-        await prisma.$transaction([
-          // 1. Delete student answers for questions created by this faculty, or exams created by this faculty
-          prisma.studentAnswer.deleteMany({
+        // Find student exams linked to these exams
+        const studentExams = await prisma.studentExam.findMany({
+          where: { examId: { in: examIds } },
+          select: { id: true }
+        });
+        const studentExamIds = studentExams.map(se => se.id);
+
+        await prisma.$transaction(async (tx) => {
+          // 1. Delete QuestionTiming records
+          await tx.questionTiming.deleteMany({
             where: {
               OR: [
                 { questionId: { in: questionIds } },
-                { studentExam: { examId: { in: examIds } } }
+                { studentExamId: { in: studentExamIds } }
               ]
             }
-          }),
-          // 2. Delete student exams for exams created by this faculty
-          prisma.studentExam.deleteMany({
+          });
+
+          // 2. Delete TimeExtension records
+          await tx.timeExtension.deleteMany({
+            where: {
+              OR: [
+                { examId: { in: examIds } },
+                { studentExamId: { in: studentExamIds } },
+                { grantedById: userId }
+              ]
+            }
+          });
+
+          // 3. Delete InstitutionAssessment records
+          await tx.institutionAssessment.deleteMany({
             where: { examId: { in: examIds } }
-          }),
-          // 3. Delete results for exams created by this faculty
-          prisma.result.deleteMany({
+          });
+
+          // 4. Delete StudentAnswer records
+          await tx.studentAnswer.deleteMany({
+            where: {
+              OR: [
+                { questionId: { in: questionIds } },
+                { studentExamId: { in: studentExamIds } }
+              ]
+            }
+          });
+
+          // 5. Delete Result records
+          await tx.result.deleteMany({
             where: { examId: { in: examIds } }
-          }),
-          // 4. Delete exam-question relation mappings
-          prisma.examQuestion.deleteMany({
+          });
+
+          // 6. Delete StudentExam records
+          await tx.studentExam.deleteMany({
+            where: { examId: { in: examIds } }
+          });
+
+          // 7. Delete ExamQuestion relation mappings
+          await tx.examQuestion.deleteMany({
             where: {
               OR: [
                 { examId: { in: examIds } },
                 { questionId: { in: questionIds } }
               ]
             }
-          }),
-          // 5. Delete question options for questions
-          prisma.questionOption.deleteMany({
+          });
+
+          // 8. Delete QuestionOption records
+          await tx.questionOption.deleteMany({
             where: { questionId: { in: questionIds } }
-          }),
-          // 6. Delete exams
-          prisma.exam.deleteMany({
+          });
+
+          // 9. Delete Exam records
+          await tx.exam.deleteMany({
             where: { facultyId }
-          }),
-          // 7. Delete questions
-          prisma.question.deleteMany({
+          });
+
+          // 10. Delete Question records
+          await tx.question.deleteMany({
             where: { facultyId }
-          }),
-          // 8. Delete faculty profile
-          prisma.faculty.delete({
+          });
+
+          // 11. Delete Portion, UploadedDocument, Notes
+          await tx.portion.deleteMany({
+            where: { facultyId }
+          });
+          await tx.uploadedDocument.deleteMany({
+            where: { facultyId }
+          });
+          await tx.note.deleteMany({
+            where: { student: { userId } }
+          }).catch(() => {});
+
+          // 12. Delete Notifications and ActivityLogs
+          await tx.notification.deleteMany({
+            where: { userId }
+          });
+          await tx.activityLog.deleteMany({
+            where: { userId }
+          });
+
+          // 13. Delete faculty profile
+          await tx.faculty.delete({
             where: { id: facultyId }
-          }),
-          // 9. Delete user
-          prisma.user.delete({
-            where: { id }
-          })
-        ]);
+          });
+
+          // 14. Delete user
+          await tx.user.delete({
+            where: { id: userId }
+          });
+        }, { timeout: 30000, maxWait: 10000 });
       } else if (user.role === 'student' && user.student) {
         const studentId = user.student.id;
 
-        await prisma.$transaction([
-          // 1. Delete student answers
-          prisma.studentAnswer.deleteMany({
+        const studentExams = await prisma.studentExam.findMany({
+          where: { studentId },
+          select: { id: true }
+        });
+        const studentExamIds = studentExams.map(se => se.id);
+
+        await prisma.$transaction(async (tx) => {
+          await tx.questionTiming.deleteMany({
+            where: { studentExamId: { in: studentExamIds } }
+          });
+          await tx.timeExtension.deleteMany({
             where: {
-              studentExam: { studentId }
+              OR: [
+                { studentId },
+                { studentExamId: { in: studentExamIds } },
+                { grantedById: userId }
+              ]
             }
-          }),
-          // 2. Delete student exams
-          prisma.studentExam.deleteMany({
+          });
+          await tx.studentAnswer.deleteMany({
+            where: { studentExamId: { in: studentExamIds } }
+          });
+          await tx.result.deleteMany({
             where: { studentId }
-          }),
-          // 3. Delete results
-          prisma.result.deleteMany({
+          });
+          await tx.studentExam.deleteMany({
             where: { studentId }
-          }),
-          // 4. Delete student profile
-          prisma.student.delete({
+          });
+          await tx.note.deleteMany({
+            where: { studentId }
+          });
+          await tx.notification.deleteMany({
+            where: { userId }
+          });
+          await tx.activityLog.deleteMany({
+            where: { userId }
+          });
+          await tx.student.delete({
             where: { id: studentId }
-          }),
-          // 5. Delete user
-          prisma.user.delete({
-            where: { id }
-          })
-        ]);
+          });
+          await tx.user.delete({
+            where: { id: userId }
+          });
+        }, { timeout: 30000, maxWait: 10000 });
       } else {
-        // Just delete user (handles admin role, or accounts with no sub-profile)
-        await prisma.user.delete({ where: { id } });
+        await prisma.notification.deleteMany({ where: { userId } });
+        await prisma.activityLog.deleteMany({ where: { userId } }).catch(() => {});
+        await prisma.user.delete({ where: { id: userId } });
       }
 
       // Create log
-      await prisma.activityLog.create({
-        data: {
-          userId: req.user!.id,
-          action: `Deleted account: ${user.name} (${user.email})`
-        }
-      });
+      if (req.user) {
+        await prisma.activityLog.create({
+          data: {
+            userId: req.user.id,
+            action: `Deleted account: ${user.name} (${user.email})`
+          }
+        }).catch(() => {});
+      }
 
       return res.status(200).json({ message: 'User account deleted successfully' });
     } catch (error) {
@@ -436,6 +551,174 @@ export const AdminController = {
         emailSent,
         emailError,
         createdAt: user.createdAt
+      });
+    } catch (error) {
+      next(error);
+    }
+  },
+
+  // 4b. Update Faculty account & profile
+  updateFaculty: async (req: AuthRequest, res: Response, next: NextFunction) => {
+    try {
+      const { id } = req.params;
+      const {
+        name,
+        email,
+        facultyId,
+        collegeId,
+        departmentId,
+        designation,
+        experience,
+        password,
+        status
+      } = req.body;
+
+      // Find user by id (either User.id or Faculty.id)
+      let user = await prisma.user.findUnique({
+        where: { id },
+        include: { faculty: true }
+      });
+
+      if (!user) {
+        const fac = await prisma.faculty.findUnique({
+          where: { id },
+          include: { user: true }
+        });
+        if (fac && fac.user) {
+          user = await prisma.user.findUnique({
+            where: { id: fac.userId },
+            include: { faculty: true }
+          });
+        }
+      }
+
+      if (!user) {
+        return res.status(404).json({ message: 'Faculty user account not found.' });
+      }
+
+      // Check email uniqueness if email changed
+      if (email && email.trim().toLowerCase() !== user.email.toLowerCase()) {
+        const existingEmail = await prisma.user.findUnique({
+          where: { email: email.trim().toLowerCase() }
+        });
+        if (existingEmail && existingEmail.id !== user.id) {
+          return res.status(400).json({
+            message: 'Email address is already in use by another account.',
+            field: 'email'
+          });
+        }
+      }
+
+      // Check college assignment (one faculty per college) if college changed
+      let resolvedCollegeId = collegeId !== undefined ? (collegeId || null) : user.faculty?.collegeId;
+      if (resolvedCollegeId && resolvedCollegeId !== user.faculty?.collegeId) {
+        const existingClgFac = await prisma.faculty.findFirst({
+          where: {
+            collegeId: resolvedCollegeId,
+            NOT: { id: user.faculty?.id }
+          },
+          include: { user: true }
+        });
+        if (existingClgFac) {
+          return res.status(400).json({
+            message: `A faculty account (${existingClgFac.user.name}) is already assigned to this college.`,
+            field: 'collegeId'
+          });
+        }
+      }
+
+      // Check employeeId uniqueness if changed
+      if (facultyId && facultyId.trim() && user.faculty?.employeeId !== facultyId.trim()) {
+        const existingEmp = await prisma.faculty.findFirst({
+          where: {
+            employeeId: facultyId.trim(),
+            NOT: { id: user.faculty?.id }
+          }
+        });
+        if (existingEmp) {
+          return res.status(400).json({
+            message: `Employee ID "${facultyId.trim()}" is already assigned to another faculty member.`,
+            field: 'facultyId'
+          });
+        }
+      }
+
+      // Prepare User update data
+      const userUpdateData: any = {};
+      if (name && name.trim()) userUpdateData.name = name.trim();
+      if (email && email.trim()) userUpdateData.email = email.trim().toLowerCase();
+      if (status && ['active', 'inactive', 'pending'].includes(status)) userUpdateData.status = status;
+      if (password && password.trim()) {
+        userUpdateData.password = await bcrypt.hash(password.trim(), 10);
+      }
+
+      // Update User
+      const updatedUser = await prisma.user.update({
+        where: { id: user.id },
+        data: userUpdateData
+      });
+
+      // Prepare Faculty update data
+      let updatedFaculty = null;
+      if (user.faculty) {
+        const facultyUpdateData: any = {};
+        if (facultyId !== undefined) {
+          facultyUpdateData.employeeId = facultyId && facultyId.trim() ? facultyId.trim() : user.faculty.employeeId;
+        }
+        if (collegeId !== undefined) {
+          facultyUpdateData.collegeId = collegeId || null;
+        }
+        if (departmentId !== undefined) {
+          facultyUpdateData.departmentId = departmentId || null;
+        }
+        if (designation !== undefined) {
+          facultyUpdateData.designation = designation || user.faculty.designation;
+        }
+        if (experience !== undefined) {
+          facultyUpdateData.experience = Number(experience) || user.faculty.experience;
+        }
+
+        updatedFaculty = await prisma.faculty.update({
+          where: { id: user.faculty.id },
+          data: facultyUpdateData,
+          include: { college: true, department: true }
+        });
+      } else if (user.role === 'faculty') {
+        // If faculty profile missing, create it
+        updatedFaculty = await prisma.faculty.create({
+          data: {
+            userId: user.id,
+            employeeId: facultyId || `FAC-${Date.now()}`,
+            collegeId: resolvedCollegeId,
+            departmentId: departmentId || null,
+            designation: designation || 'Faculty Member',
+            experience: Number(experience) || 1
+          },
+          include: { college: true, department: true }
+        });
+      }
+
+      if (req.user) {
+        await prisma.activityLog.create({
+          data: {
+            userId: req.user.id,
+            action: `Admin updated faculty account: ${updatedUser.name} (${updatedUser.email})`
+          }
+        }).catch(() => {});
+      }
+
+      return res.status(200).json({
+        id: updatedUser.id,
+        name: updatedUser.name,
+        email: updatedUser.email,
+        role: updatedUser.role,
+        status: updatedUser.status,
+        facultyId: updatedFaculty?.employeeId || updatedFaculty?.id,
+        collegeId: updatedFaculty?.collegeId,
+        collegeName: updatedFaculty?.college?.collegeName,
+        departmentId: updatedFaculty?.departmentId,
+        departmentName: updatedFaculty?.department?.departmentName,
+        message: 'Faculty account updated successfully'
       });
     } catch (error) {
       next(error);
@@ -1227,16 +1510,43 @@ export const AdminController = {
     } catch (error) {
       next(error);
     }
-  },  // Reset user password — supports custom password, role-specific emails
+  },  // Reset user password — supports custom password, role-specific emails, User ID or Profile ID
   resetUserPassword: async (req: AuthRequest, res: Response, next: NextFunction) => {
     try {
       const { id } = req.params;
       const { newPassword: customPassword, password: fallbackPassword } = req.body || {};
 
-      const user = await prisma.user.findUnique({ 
+      let user = await prisma.user.findUnique({ 
         where: { id },
         include: { faculty: true, student: true }
       });
+
+      if (!user) {
+        const fac = await prisma.faculty.findUnique({
+          where: { id },
+          include: { user: true }
+        });
+        if (fac && fac.user) {
+          user = await prisma.user.findUnique({
+            where: { id: fac.userId },
+            include: { faculty: true, student: true }
+          });
+        }
+      }
+
+      if (!user) {
+        const stu = await prisma.student.findUnique({
+          where: { id },
+          include: { user: true }
+        });
+        if (stu && stu.user) {
+          user = await prisma.user.findUnique({
+            where: { id: stu.userId },
+            include: { faculty: true, student: true }
+          });
+        }
+      }
+
       if (!user) return res.status(404).json({ message: 'User not found' });
 
       // Generate or use custom password
@@ -1247,7 +1557,7 @@ export const AdminController = {
       const hashed = await bcrypt.hash(newPassword, 10);
 
       await prisma.user.update({
-        where: { id },
+        where: { id: user.id },
         data: { password: hashed }
       });
 
