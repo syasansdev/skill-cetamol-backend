@@ -253,7 +253,8 @@ export const AdminController = {
   createFaculty: async (req: AuthRequest, res: Response, next: NextFunction) => {
     try {
       const { name, email: rawEmail, password, facultyId, collegeId, role, departmentId } = req.body;
-      const email = rawEmail.toLowerCase();
+      const email = (rawEmail || '').trim().toLowerCase();
+      const cleanPassword = password && password.trim() ? password.trim() : 'faculty123';
 
       // Check if email already exists
       const existingUser = await prisma.user.findUnique({ where: { email } });
@@ -310,7 +311,7 @@ export const AdminController = {
       }
 
       // Hash password
-      const hashedPassword = await bcrypt.hash(password || 'faculty123', 10);
+      const hashedPassword = await bcrypt.hash(cleanPassword, 10);
 
       // Create User
       const user = await prisma.user.create({
@@ -430,7 +431,7 @@ export const AdminController = {
         collegeId: resolvedCollegeId,
         collegeName: (await prisma.college.findUnique({ where: { id: resolvedCollegeId || '' } }))?.collegeName,
         departmentId: resolvedDeptId,
-        password: password || 'faculty123',
+        password: cleanPassword,
         subjects: [],
         emailSent,
         emailError,
@@ -1321,13 +1322,16 @@ export const AdminController = {
 
       if (!user) return res.status(404).json({ message: 'User not found' });
 
-      const finalPassword = password && password.trim() ? password.trim() : 'faculty123';
-      const hashed = await bcrypt.hash(finalPassword, 10);
-
-      await prisma.user.update({
-        where: { id },
-        data: { password: hashed }
-      });
+      let finalPassword = password && password.trim() ? password.trim() : null;
+      if (finalPassword) {
+        const hashed = await bcrypt.hash(finalPassword, 10);
+        await prisma.user.update({
+          where: { id },
+          data: { password: hashed }
+        });
+      } else {
+        finalPassword = 'Your existing account password';
+      }
 
       let emailSent = false;
       let emailError: string | null = null;

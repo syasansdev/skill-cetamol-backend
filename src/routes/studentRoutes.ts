@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { StudentController } from '../controllers/studentController';
+import { StudentAnalyticsController } from '../controllers/studentAnalyticsController';
 import { authenticateToken, requireRole } from '../middleware/auth';
 import multer from 'multer';
 import path from 'path';
@@ -36,6 +37,10 @@ router.post('/exams/:id/auto-save', StudentController.autoSaveExam);
 router.post('/exams/:id/proctor-event', StudentController.logProctorEvent);
 router.get('/results', StudentController.getResults);
 router.get('/results/:id', StudentController.getResultDetails);
+
+// Master Analytics & Individual Test Reports
+router.get('/analytics/master-summary', StudentAnalyticsController.getMasterAnalytics);
+router.get('/reports/:id', StudentAnalyticsController.getIndividualReport);
 
 // Academic and Portions
 router.get('/subjects', StudentController.getSubjects);

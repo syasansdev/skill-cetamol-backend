@@ -2,6 +2,9 @@ import { Router } from 'express';
 import multer from 'multer';
 import { FacultyController } from '../controllers/facultyController';
 import { AdminController } from '../controllers/adminController';
+import { ExamExtensionController } from '../controllers/examExtensionController';
+import { PerformanceThresholdController } from '../controllers/performanceThresholdController';
+import { AdminAnalyticsController } from '../controllers/adminAnalyticsController';
 import { authenticateToken, requireRole } from '../middleware/auth';
 import { validateBody } from '../middleware/validation';
 import { createExamSchema, createQuestionSchema } from '../validators';
@@ -28,6 +31,16 @@ router.get('/departments', FacultyController.getDepartments);
 router.get('/results', FacultyController.getResults);
 router.get('/pending-students', FacultyController.getPendingStudents);
 router.post('/students/:id/approve', FacultyController.approveStudent);
+
+// Test Time Extension operations (Faculty / Invigilator)
+router.post('/exams/extend-time', ExamExtensionController.extendTime);
+router.get('/exams/extensions', ExamExtensionController.getExtensionHistory);
+router.get('/exams/active-sessions', ExamExtensionController.getActiveSessions);
+
+// Performance Classification Thresholds & Analytics
+router.get('/performance-thresholds', PerformanceThresholdController.getThresholds);
+router.get('/analytics/consolidated-dashboard', AdminAnalyticsController.getConsolidatedDashboard);
+router.get('/analytics/student-profile/:studentId', AdminAnalyticsController.getStudentProfile);
 
 // New enterprise endpoints
 router.get('/upcoming-exams', FacultyController.getUpcomingExams);
@@ -60,4 +73,3 @@ router.put('/unlock-exam/:id', AdminController.unlockExam);
 router.put('/revoke-exam/:id', AdminController.revokeExam);
 
 export default router;
-

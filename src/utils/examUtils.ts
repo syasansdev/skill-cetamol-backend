@@ -1,3 +1,5 @@
+import { classifyScore } from './performanceClassification';
+
 /**
  * Exam Utilities
  * Deterministic question assignment, evaluation, scoring, and text formatting.
@@ -68,6 +70,7 @@ export interface EvaluatedQuestionDetail {
   studentOption: string | string[] | null;
   isCorrect: boolean;
   marksAwarded: number;
+  points: number;
   difficulty: string;
 }
 
@@ -88,6 +91,7 @@ export interface EvaluationResult {
   totalPoints: number;
   percentage: number;
   status: 'pass' | 'fail';
+  performanceCategory: 'Exceptional' | 'Good' | 'Average' | 'Needs Improvement';
   answerInserts: AnswerInsertData[];
   detailedQuestions: EvaluatedQuestionDetail[];
 }
@@ -250,6 +254,7 @@ export function evaluateExamAnswers(
       studentOption: studentOptionForDetail,
       isCorrect,
       marksAwarded,
+      points: marksPerQ,
       difficulty: q.difficulty || 'medium'
     });
   }
@@ -265,6 +270,7 @@ export function evaluateExamAnswers(
 
   const passThreshold = exam.passPercentage || 40;
   const status: 'pass' | 'fail' = (percentage >= passThreshold && finalScore > 0) ? 'pass' : 'fail';
+  const { category: performanceCategory } = classifyScore(percentage);
 
   return {
     assignedEqs,
@@ -275,6 +281,7 @@ export function evaluateExamAnswers(
     totalPoints,
     percentage,
     status,
+    performanceCategory,
     answerInserts,
     detailedQuestions
   };

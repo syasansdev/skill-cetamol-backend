@@ -26,20 +26,21 @@ model User {
 }
 
 model College {
-  id          String       @id @default(uuid())
-  collegeName String       @unique
-  code        String?
-  createdAt   DateTime     @default(now())
-  departments Department[]
-  faculty     Faculty?
-  students    Student[]
-  exams       Exam[]
+  id                     String                  @id @default(uuid())
+  collegeName            String                  @unique
+  code                   String?
+  createdAt              DateTime                @default(now())
+  departments            Department[]
+  faculty                Faculty?
+  students               Student[]
+  exams                  Exam[]
+  institutionAssessments InstitutionAssessment[]
 }
 
 model Student {
-  id             String        @id @default(uuid())
-  userId         String        @unique
-  registerNumber String        @unique
+  id             String          @id @default(uuid())
+  userId         String          @unique
+  registerNumber String          @unique
   category       String?
   departmentId   String
   courseId       String?
@@ -50,12 +51,13 @@ model Student {
   address        String?
   photoUrl       String?
   results        Result[]
-  college        College?      @relation(fields: [collegeId], references: [id])
-  course         Course?       @relation(fields: [courseId], references: [id])
-  department     Department    @relation(fields: [departmentId], references: [id])
-  user           User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  college        College?        @relation(fields: [collegeId], references: [id])
+  course         Course?         @relation(fields: [courseId], references: [id])
+  department     Department      @relation(fields: [departmentId], references: [id])
+  user           User            @relation(fields: [userId], references: [id], onDelete: Cascade)
   studentExams   StudentExam[]
   notes          Note[]
+  timeExtensions TimeExtension[]
 }
 
 model Faculty {
@@ -129,6 +131,7 @@ model Question {
   uploadedDocument   UploadedDocument? @relation(fields: [uploadedDocumentId], references: [id], onDelete: Cascade)
   options            QuestionOption[]
   studentAnswers     StudentAnswer[]
+  questionTimings    QuestionTiming[]
 }
 
 model QuestionOption {
@@ -140,33 +143,37 @@ model QuestionOption {
 }
 
 model Exam {
-  id               String         @id @default(uuid())
-  title            String
-  description      String
-  subjectId        String?
-  facultyId        String
-  departmentId     String?
-  collegeId        String?
-  category         String?
-  paperName        String?
-  targetYears      String?        @default("all")
-  targetYear       Int?
-  duration         Int
-  totalMarks       Int
-  startDate        DateTime
-  endDate          DateTime
-  status           String
-  questionCount    Int            @default(10)
-  negativeMarking  Boolean        @default(false)
-  marksPerQuestion Float          @default(1.0)
-  negativeMarks    Float          @default(0.0)
-  faculty          Faculty        @relation(fields: [facultyId], references: [id])
-  subject          Subject?       @relation(fields: [subjectId], references: [id])
-  department       Department?    @relation(fields: [departmentId], references: [id])
-  college          College?       @relation(fields: [collegeId], references: [id])
-  examQuestions    ExamQuestion[]
-  results          Result[]
-  studentExams     StudentExam[]
+  id                     String                  @id @default(uuid())
+  title                  String
+  description            String
+  instructions           String?
+  subjectId              String?
+  facultyId              String
+  departmentId           String?
+  collegeId              String?
+  category               String?
+  paperName              String?
+  targetYears            String?                 @default("all")
+  targetYear             Int?
+  duration               Int
+  totalMarks             Int
+  startDate              DateTime
+  endDate                DateTime
+  status                 String
+  publishedStatus        String?                 @default("published")
+  questionCount          Int                     @default(10)
+  negativeMarking        Boolean                 @default(false)
+  marksPerQuestion       Float                   @default(1.0)
+  negativeMarks          Float                   @default(0.0)
+  faculty                Faculty                 @relation(fields: [facultyId], references: [id])
+  subject                Subject?                @relation(fields: [subjectId], references: [id])
+  department             Department?             @relation(fields: [departmentId], references: [id])
+  college                College?                @relation(fields: [collegeId], references: [id])
+  examQuestions          ExamQuestion[]
+  results                Result[]
+  studentExams           StudentExam[]
+  institutionAssessments InstitutionAssessment[]
+  timeExtensions         TimeExtension[]
 }
 
 model ExamQuestion {
@@ -180,22 +187,26 @@ model ExamQuestion {
 }
 
 model StudentExam {
-  id             String          @id @default(uuid())
-  studentId      String
-  examId         String
-  startedAt      DateTime        @default(now())
-  submittedAt    DateTime?
-  status         String
-  score          Float           @default(0)
-  lockReason     String?
-  lockedAt       DateTime?
-  reentryAllowed Boolean         @default(false)
-  unlockedAt     DateTime?
-  warningCount   Int             @default(0)
-  timeRemaining  Int             @default(0)
-  studentAnswers StudentAnswer[]
-  exam           Exam            @relation(fields: [examId], references: [id], onDelete: Cascade)
-  student        Student         @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  id                    String           @id @default(uuid())
+  studentId             String
+  examId                String
+  startedAt             DateTime         @default(now())
+  submittedAt           DateTime?
+  deadline              DateTime?
+  totalExtensionMinutes Int              @default(0)
+  status                String
+  score                 Float            @default(0)
+  lockReason            String?
+  lockedAt              DateTime?
+  reentryAllowed        Boolean          @default(false)
+  unlockedAt            DateTime?
+  warningCount          Int              @default(0)
+  timeRemaining         Int              @default(0)
+  studentAnswers        StudentAnswer[]
+  questionTimings       QuestionTiming[]
+  timeExtensions        TimeExtension[]
+  exam                  Exam             @relation(fields: [examId], references: [id], onDelete: Cascade)
+  student               Student          @relation(fields: [studentId], references: [id], onDelete: Cascade)
 
   @@unique([studentId, examId])
 }
@@ -213,17 +224,78 @@ model StudentAnswer {
 }
 
 model Result {
-  id         String  @id @default(uuid())
-  studentId  String
-  examId     String
-  percentage Float
-  rank       Int?
-  grade      String?
-  status     String
-  exam       Exam    @relation(fields: [examId], references: [id], onDelete: Cascade)
-  student    Student @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  id                         String   @id @default(uuid())
+  studentId                  String
+  examId                     String
+  percentage                 Float
+  rank                       Int?
+  grade                      String?
+  status                     String
+  performanceCategory        String?
+  totalActiveTimeSeconds     Int?
+  averageQuestionTimeSeconds Float?
+  exam                       Exam     @relation(fields: [examId], references: [id], onDelete: Cascade)
+  student                    Student  @relation(fields: [studentId], references: [id], onDelete: Cascade)
 
   @@unique([studentId, examId])
+}
+
+model QuestionTiming {
+  id               String      @id @default(uuid())
+  studentExamId    String
+  questionId       String
+  timeSpentSeconds Int         @default(0)
+  createdAt        DateTime    @default(now())
+  updatedAt        DateTime    @updatedAt
+  studentExam      StudentExam @relation(fields: [studentExamId], references: [id], onDelete: Cascade)
+  question         Question    @relation(fields: [questionId], references: [id], onDelete: Cascade)
+
+  @@unique([studentExamId, questionId])
+  @@index([studentExamId])
+}
+
+model PerformanceThreshold {
+  id          String   @id @default(uuid())
+  category    String   @unique
+  minScore    Float
+  maxScore    Float
+  color       String?
+  description String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model TimeExtension {
+  id               String       @id @default(uuid())
+  studentExamId    String
+  studentId        String
+  examId           String
+  originalDeadline DateTime?
+  newDeadline      DateTime?
+  extensionMinutes Int
+  reason           String?
+  grantedById      String
+  grantedByRole    String
+  createdAt        DateTime     @default(now())
+  studentExam      StudentExam  @relation(fields: [studentExamId], references: [id], onDelete: Cascade)
+  student          Student      @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  exam             Exam         @relation(fields: [examId], references: [id], onDelete: Cascade)
+
+  @@index([studentExamId])
+  @@index([examId])
+}
+
+model InstitutionAssessment {
+  id          String    @id @default(uuid())
+  examId      String
+  collegeId   String
+  status      String    @default("published")
+  publishedAt DateTime? @default(now())
+  exam        Exam      @relation(fields: [examId], references: [id], onDelete: Cascade)
+  college     College   @relation(fields: [collegeId], references: [id], onDelete: Cascade)
+
+  @@unique([examId, collegeId])
+  @@index([collegeId])
 }
 
 model Notification {

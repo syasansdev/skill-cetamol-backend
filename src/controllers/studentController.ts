@@ -11,7 +11,8 @@ export const StudentController = {
   getExams: async (req: AuthRequest, res: Response, next: NextFunction) => {
     try {
       const student = await prisma.student.findUnique({
-        where: { userId: req.user!.id }
+        where: { userId: req.user!.id },
+        include: { user: true }
       });
 
       if (!student) {
@@ -24,9 +25,20 @@ export const StudentController = {
 
       const collegeExams = await prisma.exam.findMany({
         where: {
-          OR: [
-            { collegeId: student.collegeId },
-            { collegeId: null }
+          AND: [
+            {
+              OR: [
+                { collegeId: student.collegeId },
+                { institutionAssessments: { some: { collegeId: student.collegeId, status: { in: ['published', 'active'] } } } },
+                { AND: [{ collegeId: null }, { institutionAssessments: { none: {} } }] }
+              ]
+            },
+            {
+              OR: [
+                { publishedStatus: { in: ['published', 'active'] } },
+                { publishedStatus: null }
+              ]
+            }
           ]
         },
         include: {
@@ -38,7 +50,8 @@ export const StudentController = {
             include: {
               question: { include: { options: true } }
             }
-          }
+          },
+          institutionAssessments: true
         },
         orderBy: { startDate: 'desc' }
       });
@@ -152,7 +165,9 @@ export const StudentController = {
         });
 
         const totalExamMarks = Math.round(questionsMapped.length * (exam.marksPerQuestion || 1));
-        const rawScore = resultObj ? Math.round((resultObj.percentage / 100) * totalExamMarks) : null;
+        const rawScore = (attempt && typeof attempt.score === 'number' && attempt.score >= 0)
+          ? attempt.score
+          : (resultObj ? Math.round((resultObj.percentage / 100) * totalExamMarks) : null);
 
         const now = new Date();
         let dynamicStatus = exam.status;
@@ -217,7 +232,8 @@ export const StudentController = {
     try {
       const { id } = req.params;
       const student = await prisma.student.findUnique({
-        where: { userId: req.user!.id }
+        where: { userId: req.user!.id },
+        include: { user: true }
       });
 
       if (!student) {
@@ -272,7 +288,11 @@ export const StudentController = {
       // Attempt details
       const attempt = await prisma.studentExam.findFirst({
         where: { studentId: student.id, examId: exam.id },
-        include: { studentAnswers: true }
+        include: {
+          studentAnswers: true,
+          questionTimings: true,
+          timeExtensions: true
+        }
       });
 
       const resultObj = await prisma.result.findFirst({
@@ -289,6 +309,19 @@ export const StudentController = {
             savedAnswers[ans.questionId] = ans.answerText;
           }
         });
+      }
+
+      const savedTimings: Record<string, number> = {};
+      if (attempt?.questionTimings) {
+        attempt.questionTimings.forEach(qt => {
+          savedTimings[qt.questionId] = qt.timeSpentSeconds;
+        });
+      }
+
+      let calculatedTimeRemaining = attempt ? attempt.timeRemaining : exam.duration * 60;
+      if (attempt && attempt.deadline) {
+        const remainingFromDeadline = Math.max(0, Math.round((new Date(attempt.deadline).getTime() - Date.now()) / 1000));
+        calculatedTimeRemaining = remainingFromDeadline;
       }
       // Deterministic question assignment for this student attempt (consistent with getExams & submitExam)
       const selectedEqs = getAssignedExamQuestions(exam, student.id);
@@ -361,9 +394,12 @@ export const StudentController = {
         resultId: resultObj?.id || null,
         attemptStatus: attempt ? attempt.status : null,
         warningCount: attempt ? attempt.warningCount : 0,
-        timeRemaining: attempt ? attempt.timeRemaining : exam.duration * 60,
+        timeRemaining: calculatedTimeRemaining,
+        deadline: attempt?.deadline ? attempt.deadline.toISOString() : null,
+        totalExtensionMinutes: attempt ? attempt.totalExtensionMinutes : 0,
         reentryAllowed: attempt ? attempt.reentryAllowed : false,
-        savedAnswers
+        savedAnswers,
+        savedTimings
       });
     } catch (error) {
       console.error('Error in StudentController.getExamById:', error);
@@ -375,7 +411,7 @@ export const StudentController = {
   submitExam: async (req: AuthRequest, res: Response, next: NextFunction) => {
     try {
       const examId = req.params.id;
-      const { answers, timeTaken } = req.body; // answers is Record<questionId, selectedOptionIdx | optionIdx[] | descriptiveText>
+      const { answers, timeTaken, questionTimings } = req.body; // answers: Record<questionId, any>, questionTimings: Record<qId, number> | Array<{ questionId, timeSpentSeconds }>
 
       const student = await prisma.student.findUnique({
         where: { userId: req.user!.id },
@@ -459,6 +495,54 @@ export const StudentController = {
         await prisma.studentAnswer.createMany({ data: evalResult.answerInserts });
       }
 
+      // Persist question timings if provided
+      if (questionTimings) {
+        if (Array.isArray(questionTimings)) {
+          for (const qt of questionTimings) {
+            if (qt.questionId && typeof qt.timeSpentSeconds === 'number') {
+              await prisma.questionTiming.upsert({
+                where: { studentExamId_questionId: { studentExamId: studentExam.id, questionId: qt.questionId } },
+                update: { timeSpentSeconds: Math.round(qt.timeSpentSeconds) },
+                create: { studentExamId: studentExam.id, questionId: qt.questionId, timeSpentSeconds: Math.round(qt.timeSpentSeconds) }
+              });
+            }
+          }
+        } else if (typeof questionTimings === 'object') {
+          for (const [qId, sec] of Object.entries(questionTimings)) {
+            if (qId && typeof sec === 'number') {
+              await prisma.questionTiming.upsert({
+                where: { studentExamId_questionId: { studentExamId: studentExam.id, questionId: qId } },
+                update: { timeSpentSeconds: Math.round(Number(sec)) },
+                create: { studentExamId: studentExam.id, questionId: qId, timeSpentSeconds: Math.round(Number(sec)) }
+              });
+            }
+          }
+        }
+      }
+
+      // Compute total active question time & average question time
+      const allTimings = await prisma.questionTiming.findMany({
+        where: { studentExamId: studentExam.id }
+      });
+
+      let totalActiveSeconds = allTimings.reduce((acc, t) => acc + (t.timeSpentSeconds || 0), 0);
+      if (totalActiveSeconds === 0 && timeTaken) {
+        totalActiveSeconds = Math.max(1, Math.round(Number(timeTaken)));
+      }
+
+      const attemptedCount = evalResult.assignedEqs.filter((eq: any) => {
+        const a = mergedAnswers[eq.question.id] || mergedAnswers[eq.id];
+        return a !== undefined && a !== null && a !== '' && (!Array.isArray(a) || a.length > 0);
+      }).length || 1;
+
+      const avgQuestionTime = attemptedCount > 0
+        ? Math.round((totalActiveSeconds / attemptedCount) * 10) / 10
+        : (evalResult.assignedEqs.length > 0 ? Math.round((totalActiveSeconds / evalResult.assignedEqs.length) * 10) / 10 : 0);
+
+      const timingValues = allTimings.map(t => t.timeSpentSeconds).filter(s => s > 0);
+      const longestTime = timingValues.length > 0 ? Math.max(...timingValues) : 0;
+      const shortestTime = timingValues.length > 0 ? Math.min(...timingValues) : 0;
+
       // Update StudentExam status and raw score
       await prisma.studentExam.update({
         where: { id: studentExam.id },
@@ -476,14 +560,20 @@ export const StudentController = {
         update: {
           percentage: evalResult.percentage,
           status: evalResult.status,
-          grade: evalResult.percentage >= 90 ? 'A+' : evalResult.percentage >= 80 ? 'A' : evalResult.percentage >= 60 ? 'B' : evalResult.percentage >= 40 ? 'C' : 'F'
+          grade: evalResult.percentage >= 90 ? 'A+' : evalResult.percentage >= 80 ? 'A' : evalResult.percentage >= 60 ? 'B' : evalResult.percentage >= 40 ? 'C' : 'F',
+          performanceCategory: evalResult.performanceCategory,
+          totalActiveTimeSeconds: totalActiveSeconds,
+          averageQuestionTimeSeconds: avgQuestionTime
         },
         create: {
           studentId: student.id,
           examId: exam.id,
           percentage: evalResult.percentage,
           status: evalResult.status,
-          grade: evalResult.percentage >= 90 ? 'A+' : evalResult.percentage >= 80 ? 'A' : evalResult.percentage >= 60 ? 'B' : evalResult.percentage >= 40 ? 'C' : 'F'
+          grade: evalResult.percentage >= 90 ? 'A+' : evalResult.percentage >= 80 ? 'A' : evalResult.percentage >= 60 ? 'B' : evalResult.percentage >= 40 ? 'C' : 'F',
+          performanceCategory: evalResult.performanceCategory,
+          totalActiveTimeSeconds: totalActiveSeconds,
+          averageQuestionTimeSeconds: avgQuestionTime
         }
       });
 
@@ -524,8 +614,14 @@ export const StudentController = {
         totalQuestions: evalResult.assignedEqs.length,
         percentage: evalResult.percentage,
         status: evalResult.status,
+        performanceCategory: evalResult.performanceCategory,
         answers: submittedAnswers,
-        timeTaken,
+        timeTaken: totalActiveSeconds,
+        totalActiveTimeSeconds: totalActiveSeconds,
+        averageQuestionTimeSeconds: avgQuestionTime,
+        longestQuestionTime: longestTime,
+        shortestQuestionTime: shortestTime,
+        questionTimings: allTimings,
         correctCount: evalResult.correctCount,
         wrongCount: evalResult.wrongCount,
         skippedCount: evalResult.skippedCount,
@@ -541,7 +637,8 @@ export const StudentController = {
   getResults: async (req: AuthRequest, res: Response, next: NextFunction) => {
     try {
       const student = await prisma.student.findUnique({
-        where: { userId: req.user!.id }
+        where: { userId: req.user!.id },
+        include: { user: true }
       });
 
       if (!student) {
@@ -554,7 +651,13 @@ export const StudentController = {
           exam: {
             include: {
               subject: true,
-              examQuestions: { include: { question: true } }
+              examQuestions: {
+                include: {
+                  question: {
+                    include: { options: true }
+                  }
+                }
+              }
             }
           }
         },
@@ -590,11 +693,39 @@ export const StudentController = {
           });
         }
 
+        const hasAnswers = Object.keys(ansMap).length > 0;
         const evalRes = evaluateExamAnswers(r.exam, student.id, ansMap);
+
+        const totalPoints = evalRes.totalPoints || (r.exam?.totalMarks || 10);
+        const finalPercentage = (r.percentage !== null && r.percentage !== undefined && (!hasAnswers || (evalRes.percentage === 0 && r.percentage > 0)))
+          ? r.percentage
+          : evalRes.percentage;
+
+        const finalScore = (se && typeof se.score === 'number' && se.score > 0)
+          ? se.score
+          : (evalRes.score > 0 ? evalRes.score : Math.round((finalPercentage / 100) * totalPoints));
+
+        const finalCategory = r.performanceCategory || evalRes.performanceCategory;
+        const finalStatus = r.status || evalRes.status;
+
+        // Auto-heal result record only if real answers were evaluated and discrepancy exists
+        if (hasAnswers && evalRes.score > 0 && (r.percentage !== evalRes.percentage || !r.performanceCategory)) {
+          prisma.result.update({
+            where: { id: r.id },
+            data: {
+              percentage: evalRes.percentage,
+              status: evalRes.status,
+              grade: evalRes.percentage >= 90 ? 'A+' : evalRes.percentage >= 80 ? 'A' : evalRes.percentage >= 60 ? 'B' : evalRes.percentage >= 40 ? 'C' : 'F',
+              performanceCategory: evalRes.performanceCategory
+            }
+          }).catch(() => {});
+        }
 
         let timeTakenSeconds = 0;
         if (se && se.submittedAt && se.startedAt) {
           timeTakenSeconds = Math.max(1, Math.round((new Date(se.submittedAt).getTime() - new Date(se.startedAt).getTime()) / 1000));
+        } else if (r.totalActiveTimeSeconds) {
+          timeTakenSeconds = r.totalActiveTimeSeconds;
         }
 
         const submissionDate = (se && se.submittedAt)
@@ -607,16 +738,17 @@ export const StudentController = {
           examTitle: r.exam?.title || 'Examination',
           subjectName: r.exam?.subject ? r.exam.subject.subjectName : 'General Evaluation',
           studentId: req.user!.id,
-          studentName: req.user!.email,
+          studentName: student.user?.name || student.registerNumber || 'Student',
           studentRollNo: student.registerNumber,
-          score: evalRes.score,
-          totalPoints: evalRes.totalPoints,
-          percentage: evalRes.percentage,
-          status: evalRes.status,
+          score: finalScore,
+          totalPoints: totalPoints,
+          percentage: finalPercentage,
+          status: finalStatus,
+          performanceCategory: finalCategory,
           timeTaken: timeTakenSeconds,
-          correctCount: evalRes.correctCount,
-          wrongCount: evalRes.wrongCount,
-          skippedCount: evalRes.skippedCount,
+          correctCount: hasAnswers ? evalRes.correctCount : Math.round((finalPercentage / 100) * (r.exam?.questionCount || 10)),
+          wrongCount: hasAnswers ? evalRes.wrongCount : 0,
+          skippedCount: hasAnswers ? evalRes.skippedCount : 0,
           submittedAt: submissionDate,
           rank: r.rank || 1
         };
@@ -634,7 +766,8 @@ export const StudentController = {
       const resultId = req.params.id;
 
       const student = await prisma.student.findUnique({
-        where: { userId: req.user!.id }
+        where: { userId: req.user!.id },
+        include: { user: true }
       });
 
       if (!student) {
@@ -663,10 +796,14 @@ export const StudentController = {
         return res.status(404).json({ message: 'Evaluation results not found' });
       }
 
-      // Fetch answers details
+      // Fetch answers details & question timings
       const studentExam = await prisma.studentExam.findFirst({
         where: { studentId: student.id, examId: result.examId },
-        include: { studentAnswers: true }
+        include: {
+          studentAnswers: true,
+          questionTimings: true,
+          timeExtensions: true
+        }
       });
 
       const ansMap: Record<string, any> = {};
@@ -680,23 +817,68 @@ export const StudentController = {
         });
       }
 
+      const hasAnswers = Object.keys(ansMap).length > 0;
       const evalRes = evaluateExamAnswers(result.exam, student.id, ansMap);
 
-      // Auto-heal result record if there was a discrepancy
-      if (result.percentage !== evalRes.percentage || result.status !== evalRes.status) {
+      const totalPoints = evalRes.totalPoints || (result.exam?.totalMarks || 10);
+      const finalPercentage = (result.percentage !== null && result.percentage !== undefined && (!hasAnswers || (evalRes.percentage === 0 && result.percentage > 0)))
+        ? result.percentage
+        : evalRes.percentage;
+
+      const finalScore = (studentExam && typeof studentExam.score === 'number' && studentExam.score > 0)
+        ? studentExam.score
+        : (evalRes.score > 0 ? evalRes.score : Math.round((finalPercentage / 100) * totalPoints));
+
+      const finalCategory = result.performanceCategory || evalRes.performanceCategory;
+      const finalStatus = result.status || evalRes.status;
+
+      // Auto-heal result record only if real answers were evaluated and discrepancy exists
+      if (hasAnswers && evalRes.score > 0 && (result.percentage !== evalRes.percentage || !result.performanceCategory)) {
         prisma.result.update({
           where: { id: result.id },
           data: {
             percentage: evalRes.percentage,
             status: evalRes.status,
-            grade: evalRes.percentage >= 90 ? 'A+' : evalRes.percentage >= 80 ? 'A' : evalRes.percentage >= 60 ? 'B' : evalRes.percentage >= 40 ? 'C' : 'F'
+            grade: evalRes.percentage >= 90 ? 'A+' : evalRes.percentage >= 80 ? 'A' : evalRes.percentage >= 60 ? 'B' : evalRes.percentage >= 40 ? 'C' : 'F',
+            performanceCategory: evalRes.performanceCategory
           }
         }).catch(() => {});
+      }
+
+      // Question timings mapping
+      const timingMap: Record<string, number> = {};
+      let totalActiveSeconds = 0;
+      if (studentExam?.questionTimings) {
+        studentExam.questionTimings.forEach(qt => {
+          timingMap[qt.questionId] = qt.timeSpentSeconds;
+          totalActiveSeconds += qt.timeSpentSeconds;
+        });
       }
 
       const computedTimeTaken = (studentExam && studentExam.submittedAt && studentExam.startedAt)
         ? Math.max(1, Math.round((new Date(studentExam.submittedAt).getTime() - new Date(studentExam.startedAt).getTime()) / 1000))
         : (result.exam?.duration ? result.exam.duration * 60 : 1200);
+
+      const finalActiveSeconds = totalActiveSeconds > 0 ? totalActiveSeconds : computedTimeTaken;
+
+      const detailedWithTiming = evalRes.detailedQuestions.map((q, idx) => ({
+        ...q,
+        questionNumber: idx + 1,
+        timeSpentSeconds: timingMap[q.id] || 0
+      }));
+
+      const timingList = Object.values(timingMap).filter(t => t > 0);
+      const longestTime = timingList.length > 0 ? Math.max(...timingList) : 0;
+      const shortestTime = timingList.length > 0 ? Math.min(...timingList) : 0;
+
+      const attemptedCount = evalRes.assignedEqs.filter((eq: any) => {
+        const a = ansMap[eq.question.id] || ansMap[eq.id];
+        return a !== undefined && a !== null && a !== '' && (!Array.isArray(a) || a.length > 0);
+      }).length || 1;
+
+      const avgQuestionTime = attemptedCount > 0
+        ? Math.round((finalActiveSeconds / attemptedCount) * 10) / 10
+        : (detailedWithTiming.length > 0 ? Math.round((finalActiveSeconds / detailedWithTiming.length) * 10) / 10 : 0);
 
       const formattedSubmittedAt = (studentExam && studentExam.submittedAt)
         ? studentExam.submittedAt.toISOString()
@@ -708,18 +890,24 @@ export const StudentController = {
         examTitle: result.exam.title,
         subjectName: result.exam.subject ? result.exam.subject.subjectName : 'General Evaluation',
         studentId: req.user!.id,
-        studentName: req.user!.email,
+        studentName: student.user?.name || student.registerNumber || 'Student',
         studentRollNo: student.registerNumber,
-        score: evalRes.score,
-        totalPoints: evalRes.totalPoints,
-        percentage: evalRes.percentage,
-        status: evalRes.status,
+        score: finalScore,
+        totalPoints: totalPoints,
+        percentage: finalPercentage,
+        status: finalStatus,
+        performanceCategory: finalCategory,
         answers: ansMap,
-        detailedQuestions: evalRes.detailedQuestions,
-        timeTaken: computedTimeTaken,
-        correctCount: evalRes.correctCount,
-        wrongCount: evalRes.wrongCount,
-        skippedCount: evalRes.skippedCount,
+        detailedQuestions: detailedWithTiming,
+        timeTaken: finalActiveSeconds,
+        totalActiveTimeSeconds: finalActiveSeconds,
+        averageQuestionTimeSeconds: avgQuestionTime,
+        longestQuestionTime: longestTime,
+        shortestQuestionTime: shortestTime,
+        questionTimings: timingMap,
+        correctCount: hasAnswers ? evalRes.correctCount : Math.round((finalPercentage / 100) * (result.exam?.questionCount || 10)),
+        wrongCount: hasAnswers ? evalRes.wrongCount : 0,
+        skippedCount: hasAnswers ? evalRes.skippedCount : 0,
         submittedAt: formattedSubmittedAt,
         rank: result.rank || 1
       });
@@ -728,15 +916,16 @@ export const StudentController = {
     }
   },
 
-  // 5. Autosave exam answers and remaining time
+  // 5. Autosave exam answers, question timings, and remaining time
   autoSaveExam: async (req: AuthRequest, res: Response, next: NextFunction) => {
     try {
       const examId = req.params.id;
-      const { answers, timeRemaining } = req.body;
+      const { answers, timeRemaining, questionTimings } = req.body;
       const safeAnswers = answers || {};
 
       const student = await prisma.student.findUnique({
-        where: { userId: req.user!.id }
+        where: { userId: req.user!.id },
+        include: { user: true }
       });
 
       if (!student) {
@@ -762,22 +951,59 @@ export const StudentController = {
         return res.status(403).json({ message: 'This examination has been locked.' });
       }
 
+      // Calculate server deadline if not yet set
+      const examDurationSec = (exam.duration || 30) * 60;
+      let effectiveRemaining = timeRemaining !== undefined ? timeRemaining : examDurationSec;
+
       if (!studentExam) {
+        const initialDeadline = new Date(Date.now() + examDurationSec * 1000);
         studentExam = await prisma.studentExam.create({
           data: {
             studentId: student.id,
             examId,
             status: 'started',
-            timeRemaining: timeRemaining || 0
+            deadline: initialDeadline,
+            timeRemaining: effectiveRemaining
           }
         });
       } else {
+        // If deadline exists, compute authoritative remaining time
+        if (studentExam.deadline) {
+          const remainingSec = Math.max(0, Math.round((new Date(studentExam.deadline).getTime() - Date.now()) / 1000));
+          effectiveRemaining = remainingSec;
+        }
+
         studentExam = await prisma.studentExam.update({
           where: { id: studentExam.id },
           data: {
-            timeRemaining: timeRemaining !== undefined ? timeRemaining : studentExam.timeRemaining
+            timeRemaining: effectiveRemaining
           }
         });
+      }
+
+      // Upsert QuestionTimings if provided
+      if (questionTimings) {
+        if (Array.isArray(questionTimings)) {
+          for (const qt of questionTimings) {
+            if (qt.questionId && typeof qt.timeSpentSeconds === 'number') {
+              await prisma.questionTiming.upsert({
+                where: { studentExamId_questionId: { studentExamId: studentExam.id, questionId: qt.questionId } },
+                update: { timeSpentSeconds: Math.round(qt.timeSpentSeconds) },
+                create: { studentExamId: studentExam.id, questionId: qt.questionId, timeSpentSeconds: Math.round(qt.timeSpentSeconds) }
+              });
+            }
+          }
+        } else if (typeof questionTimings === 'object') {
+          for (const [qId, sec] of Object.entries(questionTimings)) {
+            if (qId && typeof sec === 'number') {
+              await prisma.questionTiming.upsert({
+                where: { studentExamId_questionId: { studentExamId: studentExam.id, questionId: qId } },
+                update: { timeSpentSeconds: Math.round(Number(sec)) },
+                create: { studentExamId: studentExam.id, questionId: qId, timeSpentSeconds: Math.round(Number(sec)) }
+              });
+            }
+          }
+        }
       }
 
       // Save Student Answers: Delete existing for this exam and insert
@@ -812,7 +1038,12 @@ export const StudentController = {
         await prisma.studentAnswer.createMany({ data: answerData });
       }
 
-      return res.status(200).json({ message: 'Answers autosaved successfully', timeRemaining: studentExam.timeRemaining });
+      return res.status(200).json({
+        message: 'Answers autosaved successfully',
+        timeRemaining: effectiveRemaining,
+        deadline: studentExam.deadline?.toISOString() || null,
+        totalExtensionMinutes: studentExam.totalExtensionMinutes
+      });
     } catch (error) {
       next(error);
     }
@@ -926,7 +1157,8 @@ export const StudentController = {
   getSubjects: async (req: AuthRequest, res: Response, next: NextFunction) => {
     try {
       const student = await prisma.student.findUnique({
-        where: { userId: req.user!.id }
+        where: { userId: req.user!.id },
+        include: { user: true }
       });
       if (!student) {
         return res.status(403).json({ message: 'Student profile not found' });
@@ -958,7 +1190,8 @@ export const StudentController = {
   getPortions: async (req: AuthRequest, res: Response, next: NextFunction) => {
     try {
       const student = await prisma.student.findUnique({
-        where: { userId: req.user!.id }
+        where: { userId: req.user!.id },
+        include: { user: true }
       });
       if (!student) {
         return res.status(403).json({ message: 'Student profile not found' });
@@ -991,7 +1224,8 @@ export const StudentController = {
   getNotes: async (req: AuthRequest, res: Response, next: NextFunction) => {
     try {
       const student = await prisma.student.findUnique({
-        where: { userId: req.user!.id }
+        where: { userId: req.user!.id },
+        include: { user: true }
       });
       if (!student) {
         return res.status(403).json({ message: 'Student profile not found' });
@@ -1026,7 +1260,8 @@ export const StudentController = {
     try {
       const { title, content, subjectId } = req.body;
       const student = await prisma.student.findUnique({
-        where: { userId: req.user!.id }
+        where: { userId: req.user!.id },
+        include: { user: true }
       });
 
       if (!student) {
@@ -1074,7 +1309,8 @@ export const StudentController = {
     try {
       const noteId = req.params.id;
       const student = await prisma.student.findUnique({
-        where: { userId: req.user!.id }
+        where: { userId: req.user!.id },
+        include: { user: true }
       });
 
       if (!student) {

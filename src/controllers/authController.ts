@@ -247,8 +247,9 @@ export const AuthController = {
   // 2. Login
   login: async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const { email: rawEmail, password } = req.body;
-      const email = rawEmail.toLowerCase();
+      const { email: rawEmail, password: rawPassword } = req.body;
+      const email = (rawEmail || '').trim().toLowerCase();
+      const password = (rawPassword || '').trim();
 
       const user = await prisma.user.findUnique({
         where: { email },
@@ -284,11 +285,11 @@ export const AuthController = {
         return res.status(401).json({ message: 'Invalid email or password' });
       }
 
-      // Generate token
+      // Generate persistent token ("forever login" until removed by admin)
       const token = jwt.sign(
         { id: user.id, email: user.email, role: user.role, status: user.status },
         process.env.JWT_SECRET || 'your_super_secret_jwt_key',
-        { expiresIn: '24h' }
+        { expiresIn: '3650d' }
       );
 
       // Audit Log
@@ -631,11 +632,11 @@ export const AuthController = {
         }
       });
 
-      // Generate token
+      // Generate persistent token ("forever login" until removed by admin)
       const token = jwt.sign(
         { id: user.id, email: user.email, role: user.role, status: user.status },
         process.env.JWT_SECRET || 'your_super_secret_jwt_key',
-        { expiresIn: '24h' }
+        { expiresIn: '3650d' }
       );
 
       // Audit Log

@@ -2,6 +2,10 @@ import { Router } from 'express';
 import multer from 'multer';
 import { AdminController } from '../controllers/adminController';
 import { FacultyController } from '../controllers/facultyController';
+import { ExamExtensionController } from '../controllers/examExtensionController';
+import { PerformanceThresholdController } from '../controllers/performanceThresholdController';
+import { AdminAnalyticsController } from '../controllers/adminAnalyticsController';
+import { SuperAdminAssessmentController } from '../controllers/superAdminAssessmentController';
 import { authenticateToken, requireRole } from '../middleware/auth';
 import { validateBody } from '../middleware/validation';
 import { createFacultySchema } from '../validators';
@@ -36,6 +40,26 @@ router.post('/courses', requireRole(['admin', 'faculty']), AdminController.creat
 router.get('/locked-exams', requireRole(['admin', 'faculty']), AdminController.getLockedExams);
 router.put('/unlock-exam/:id', requireRole(['admin', 'faculty']), AdminController.unlockExam);
 router.put('/revoke-exam/:id', requireRole(['admin', 'faculty']), AdminController.revokeExam);
+
+// Test Time Extension operations (Admin & Invigilator)
+router.post('/exams/extend-time', requireRole(['admin', 'faculty']), ExamExtensionController.extendTime);
+router.get('/exams/extensions', requireRole(['admin', 'faculty']), ExamExtensionController.getExtensionHistory);
+router.get('/exams/active-sessions', requireRole(['admin', 'faculty']), ExamExtensionController.getActiveSessions);
+
+// Performance Classification Thresholds
+router.get('/performance-thresholds', requireRole(['admin', 'faculty']), PerformanceThresholdController.getThresholds);
+router.put('/performance-thresholds', requireRole(['admin']), PerformanceThresholdController.updateThresholds);
+router.post('/performance-thresholds/recalculate', requireRole(['admin']), PerformanceThresholdController.recalculateResults);
+
+// Consolidated Student Performance Dashboard & Student Drill-down
+router.get('/analytics/consolidated-dashboard', requireRole(['admin', 'faculty']), AdminAnalyticsController.getConsolidatedDashboard);
+router.get('/analytics/student-profile/:studentId', requireRole(['admin', 'faculty']), AdminAnalyticsController.getStudentProfile);
+
+// Super Admin Centralized Assessments & Multi-Institution Publishing
+router.post('/central-exams', requireRole(['admin']), SuperAdminAssessmentController.createCentralAssessment);
+router.get('/central-exams', requireRole(['admin']), SuperAdminAssessmentController.getCentralAssessments);
+router.put('/central-exams/:id/publish', requireRole(['admin']), SuperAdminAssessmentController.publishAssessment);
+router.get('/central-exams/:examId/monitoring', requireRole(['admin']), SuperAdminAssessmentController.getCrossInstitutionMonitoring);
 
 router.use(requireRole(['admin']));
 
