@@ -52,8 +52,13 @@ router.put('/performance-thresholds', requireRole(['admin']), PerformanceThresho
 router.post('/performance-thresholds/recalculate', requireRole(['admin']), PerformanceThresholdController.recalculateResults);
 
 // Consolidated Student Performance Dashboard & Student Drill-down
+router.get('/analytics/consolidated', requireRole(['admin', 'faculty']), AdminAnalyticsController.getConsolidatedDashboard);
 router.get('/analytics/consolidated-dashboard', requireRole(['admin', 'faculty']), AdminAnalyticsController.getConsolidatedDashboard);
+router.get('/analytics/student/:studentId', requireRole(['admin', 'faculty']), AdminAnalyticsController.getStudentProfile);
 router.get('/analytics/student-profile/:studentId', requireRole(['admin', 'faculty']), AdminAnalyticsController.getStudentProfile);
+
+// Question Bank read access for Admin & Faculty
+router.get('/questions', requireRole(['admin', 'faculty']), FacultyController.getQuestions);
 
 // Super Admin Centralized Assessments & Multi-Institution Publishing
 router.post('/central-exams', requireRole(['admin']), SuperAdminAssessmentController.createCentralAssessment);

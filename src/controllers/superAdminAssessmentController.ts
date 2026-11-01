@@ -226,7 +226,38 @@ export const SuperAdminAssessmentController = {
   // 3. Central Assessment Overview List
   getCentralAssessments: async (req: AuthRequest, res: Response, next: NextFunction) => {
     try {
+      let whereClause: any = {};
+      if (req.user && req.user.role === 'faculty') {
+        const faculty = await prisma.faculty.findUnique({
+          where: { userId: req.user.id }
+        });
+        if (faculty?.collegeId) {
+          whereClause = {
+            OR: [
+              { collegeId: faculty.collegeId },
+              {
+                institutionAssessments: {
+                  some: {
+                    collegeId: faculty.collegeId,
+                    status: { in: ['published', 'active'] }
+                  }
+                }
+              },
+              { collegeId: null, institutionAssessments: { none: {} } }
+            ]
+          };
+        } else {
+          whereClause = {
+            OR: [
+              { facultyId: faculty?.id || '__none__' },
+              { collegeId: null, institutionAssessments: { none: {} } }
+            ]
+          };
+        }
+      }
+
       const exams = await prisma.exam.findMany({
+        where: whereClause,
         include: {
           subject: true,
           institutionAssessments: {
@@ -243,28 +274,28 @@ export const SuperAdminAssessmentController = {
         orderBy: { startDate: 'desc' }
       });
 
-      const formatted = exams.map(e => ({
+      const formatted = (exams || []).map(e => ({
         id: e.id,
         title: e.title,
         description: e.description,
-        instructions: e.instructions,
+        instructions: e.instructions || '',
         subjectName: e.subject?.subjectName || 'General Evaluation',
         subjectId: e.subjectId,
         duration: e.duration,
         totalMarks: e.totalMarks,
-        questionCount: e.questionCount || e._count.examQuestions,
-        startDate: e.startDate.toISOString(),
-        endDate: e.endDate.toISOString(),
+        questionCount: e.questionCount || e._count?.examQuestions || 0,
+        startDate: e.startDate ? e.startDate.toISOString() : new Date().toISOString(),
+        endDate: e.endDate ? e.endDate.toISOString() : new Date().toISOString(),
         status: e.status,
         publishedStatus: e.publishedStatus || 'published',
-        assignedInstitutionsCount: e.institutionAssessments.length,
-        assignedInstitutions: e.institutionAssessments.map(ia => ({
+        assignedInstitutionsCount: e.institutionAssessments ? e.institutionAssessments.length : 0,
+        assignedInstitutions: (e.institutionAssessments || []).map(ia => ({
           collegeId: ia.collegeId,
-          collegeName: ia.college.collegeName,
+          collegeName: ia.college?.collegeName || 'Unknown College',
           status: ia.status
         })),
-        completedCount: e._count.results,
-        startedCount: e._count.studentExams
+        completedCount: e._count?.results || 0,
+        startedCount: e._count?.studentExams || 0
       }));
 
       return res.status(200).json(formatted);

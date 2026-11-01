@@ -226,13 +226,31 @@ export const FacultyController = {
         });
         if (faculty) {
           const orConditions: any[] = [
-            { facultyId: faculty.id },
-            { collegeId: null }
+            { facultyId: faculty.id }
           ];
           if (faculty.collegeId) {
             orConditions.push({ collegeId: faculty.collegeId });
+            orConditions.push({
+              institutionAssessments: {
+                some: {
+                  collegeId: faculty.collegeId,
+                  status: { in: ['published', 'active'] }
+                }
+              }
+            });
+            orConditions.push({
+              collegeId: null,
+              institutionAssessments: { none: {} }
+            });
+          } else {
+            orConditions.push({
+              collegeId: null,
+              institutionAssessments: { none: {} }
+            });
           }
           whereClause = { OR: orConditions };
+        } else {
+          whereClause = { id: '__no_faculty_found__' };
         }
       }
 
@@ -243,6 +261,9 @@ export const FacultyController = {
           department: true,
           subject: true,
           faculty: { include: { user: true } },
+          institutionAssessments: {
+            include: { college: true }
+          },
           examQuestions: {
             include: {
               question: {
@@ -335,6 +356,9 @@ export const FacultyController = {
           id: e.id,
           title: e.title,
           description: e.description,
+          instructions: e.instructions || '',
+          publishedStatus: e.publishedStatus || 'published',
+          totalMarks: e.totalMarks,
           subjectId: e.subjectId,
           subjectName: displaySubjectName,
           collegeId: e.collegeId,

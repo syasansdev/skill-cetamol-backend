@@ -14,6 +14,7 @@ import studentRouter from './routes/studentRoutes';
 import uploadRouter from './routes/uploadRoutes';
 import academicRouter from './routes/academicRoutes';
 import notificationRouter from './routes/notificationRoutes';
+import centralExamRouter from './routes/centralExamRoutes';
 
 
 // Import Error Handler
@@ -82,7 +83,71 @@ async function backfillFacultyEmployeeIds() {
 import { seedExamsForAllQuestions } from './scripts/seedAllQuestionsExams';
 import { setup12SubjectsAndCategorize } from './scripts/setup12SubjectsAndCategorize';
 
+async function ensureDatabaseSchemaSynced() {
+  try {
+    const statements = [
+      `ALTER TABLE "Exam" ADD COLUMN IF NOT EXISTS "instructions" TEXT`,
+      `ALTER TABLE "Exam" ADD COLUMN IF NOT EXISTS "publishedStatus" TEXT DEFAULT 'published'`,
+      `ALTER TABLE "Exam" ADD COLUMN IF NOT EXISTS "category" TEXT`,
+      `ALTER TABLE "Exam" ADD COLUMN IF NOT EXISTS "paperName" TEXT`,
+      `ALTER TABLE "Exam" ADD COLUMN IF NOT EXISTS "targetYears" TEXT DEFAULT 'all'`,
+      `ALTER TABLE "Exam" ADD COLUMN IF NOT EXISTS "targetYear" INTEGER`,
+      `ALTER TABLE "StudentExam" ADD COLUMN IF NOT EXISTS "deadline" TIMESTAMP(3)`,
+      `ALTER TABLE "StudentExam" ADD COLUMN IF NOT EXISTS "totalExtensionMinutes" INTEGER NOT NULL DEFAULT 0`,
+      `ALTER TABLE "Result" ADD COLUMN IF NOT EXISTS "performanceCategory" TEXT`,
+      `ALTER TABLE "Result" ADD COLUMN IF NOT EXISTS "totalActiveTimeSeconds" INTEGER`,
+      `ALTER TABLE "Result" ADD COLUMN IF NOT EXISTS "averageQuestionTimeSeconds" DOUBLE PRECISION`,
+      `CREATE TABLE IF NOT EXISTS "QuestionTiming" (
+        "id" TEXT PRIMARY KEY,
+        "studentExamId" TEXT NOT NULL,
+        "questionId" TEXT NOT NULL,
+        "timeSpentSeconds" INTEGER NOT NULL DEFAULT 0,
+        "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP
+      )`,
+      `CREATE TABLE IF NOT EXISTS "PerformanceThreshold" (
+        "id" TEXT PRIMARY KEY,
+        "category" TEXT NOT NULL,
+        "minScore" DOUBLE PRECISION NOT NULL,
+        "maxScore" DOUBLE PRECISION NOT NULL,
+        "color" TEXT,
+        "description" TEXT,
+        "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP
+      )`,
+      `CREATE TABLE IF NOT EXISTS "TimeExtension" (
+        "id" TEXT PRIMARY KEY,
+        "studentExamId" TEXT NOT NULL,
+        "studentId" TEXT NOT NULL,
+        "examId" TEXT NOT NULL,
+        "originalDeadline" TIMESTAMP(3),
+        "newDeadline" TIMESTAMP(3),
+        "extensionMinutes" INTEGER NOT NULL,
+        "reason" TEXT,
+        "grantedById" TEXT NOT NULL,
+        "grantedByRole" TEXT NOT NULL,
+        "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP
+      )`,
+      `CREATE TABLE IF NOT EXISTS "InstitutionAssessment" (
+        "id" TEXT PRIMARY KEY,
+        "examId" TEXT NOT NULL,
+        "collegeId" TEXT NOT NULL,
+        "status" TEXT NOT NULL DEFAULT 'published',
+        "publishedAt" TIMESTAMP(3) DEFAULT CURRENT_TIMESTAMP
+      )`
+    ];
+
+    for (const stmt of statements) {
+      await prisma.$executeRawUnsafe(stmt);
+    }
+    console.log('[Startup] Database schema self-healing verification completed.');
+  } catch (err) {
+    console.warn('[Startup] Warning during schema self-healing verification:', err);
+  }
+}
+
 async function initDb() {
+  await ensureDatabaseSchemaSynced();
   await cleanupSeededData();
   await importGoogleDriveQuestions();
   await seedQuantitativeAptitudeQuestions();
@@ -173,6 +238,7 @@ app.get('/api/diagnostics', async (req, res) => {
 // Setup API Routes
 app.use('/api/auth', authRouter);
 app.use('/api/admin', adminRouter);
+app.use('/api/central-exams', centralExamRouter);
 app.use('/api/faculty', facultyRouter);
 app.use('/api/student', studentRouter);
 app.use('/api/upload', uploadRouter);

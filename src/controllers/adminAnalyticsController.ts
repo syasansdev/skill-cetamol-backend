@@ -12,14 +12,20 @@ export const AdminAnalyticsController = {
         return res.status(401).json({ message: 'Authentication required' });
       }
 
-      const { collegeId, examId, subjectId, category, startDate, endDate, search } = req.query;
+      // Support all parameter aliases: standard, frontend, and specification
+      const collegeFilter = (req.query.collegeId || req.query.institution || req.query.college) as string;
+      const examFilter = (req.query.examId || req.query.assessment || req.query.exam) as string;
+      const subjectFilter = (req.query.subjectId || req.query.subject) as string;
+      const categoryFilter = (req.query.category || req.query.classification) as string;
+      const startDateFilter = (req.query.startDate || req.query.fromDate || req.query.from) as string;
+      const endDateFilter = (req.query.endDate || req.query.toDate || req.query.to) as string;
+      const searchTerm = (req.query.search || req.query.q) as string;
 
       // 1. Institution Isolation Gating
       let authorizedCollegeId: string | null = null;
       let isSuperAdmin = false;
 
       if (user.role === 'admin') {
-        // Check if admin has college restriction or is global super-admin
         const adminUser = await prisma.user.findUnique({
           where: { id: user.id },
           include: { faculty: true }
@@ -36,16 +42,15 @@ export const AdminAnalyticsController = {
         }
       }
 
-      // If user is restricted to a college, enforce it strictly
-      const effectiveCollegeId = authorizedCollegeId || (collegeId && collegeId !== 'all' ? String(collegeId) : null);
+      const effectiveCollegeId = authorizedCollegeId || (collegeFilter && collegeFilter !== 'all' ? String(collegeFilter) : null);
 
       // Student filters
       const studentWhere: any = {};
       if (effectiveCollegeId) {
         studentWhere.collegeId = effectiveCollegeId;
       }
-      if (search && String(search).trim()) {
-        const term = String(search).trim();
+      if (searchTerm && String(searchTerm).trim()) {
+        const term = String(searchTerm).trim();
         studentWhere.OR = [
           { user: { name: { contains: term, mode: 'insensitive' } } },
           { user: { email: { contains: term, mode: 'insensitive' } } },
@@ -70,11 +75,16 @@ export const AdminAnalyticsController = {
         studentId: { in: studentIds }
       };
 
-      if (examId && examId !== 'all') {
-        resultWhere.examId = String(examId);
+      if (examFilter && examFilter !== 'all') {
+        resultWhere.examId = String(examFilter);
       }
-      if (subjectId && subjectId !== 'all') {
-        resultWhere.exam = { subjectId: String(subjectId) };
+      if (subjectFilter && subjectFilter !== 'all') {
+        resultWhere.exam = {
+          OR: [
+            { subjectId: String(subjectFilter) },
+            { subject: { subjectName: { contains: String(subjectFilter), mode: 'insensitive' } } }
+          ]
+        };
       }
 
       const results = await prisma.result.findMany({
@@ -93,7 +103,7 @@ export const AdminAnalyticsController = {
       const studentExams = await prisma.studentExam.findMany({
         where: {
           studentId: { in: studentIds },
-          ...(examId && examId !== 'all' ? { examId: String(examId) } : {})
+          ...(examFilter && examFilter !== 'all' ? { examId: String(examFilter) } : {})
         },
         include: { questionTimings: true }
       });
@@ -117,18 +127,18 @@ export const AdminAnalyticsController = {
         };
       });
 
-      if (startDate) {
-        const s = new Date(String(startDate));
+      if (startDateFilter) {
+        const s = new Date(String(startDateFilter));
         filteredResults = filteredResults.filter(r => r.attemptDate >= s);
       }
-      if (endDate) {
-        const e = new Date(String(endDate));
+      if (endDateFilter) {
+        const e = new Date(String(endDateFilter));
         e.setHours(23, 59, 59, 999);
         filteredResults = filteredResults.filter(r => r.attemptDate <= e);
       }
 
-      if (category && category !== 'all') {
-        filteredResults = filteredResults.filter(r => r.calculatedCategory === category);
+      if (categoryFilter && categoryFilter !== 'all') {
+        filteredResults = filteredResults.filter(r => r.calculatedCategory.toLowerCase() === categoryFilter.toLowerCase());
       }
 
       // Group performance per student
@@ -137,6 +147,7 @@ export const AdminAnalyticsController = {
         scores: number[];
         testsTaken: number;
         resultsList: any[];
+        lastActive: string | null;
       }>();
 
       students.forEach(s => {
@@ -144,7 +155,8 @@ export const AdminAnalyticsController = {
           student: s,
           scores: [],
           testsTaken: 0,
-          resultsList: []
+          resultsList: [],
+          lastActive: null
         });
       });
 
@@ -154,6 +166,10 @@ export const AdminAnalyticsController = {
           m.scores.push(r.percentage);
           m.testsTaken += 1;
           m.resultsList.push(r);
+          const actDate = r.attemptDate.toISOString();
+          if (!m.lastActive || actDate > m.lastActive) {
+            m.lastActive = actDate;
+          }
         }
       });
 
@@ -202,12 +218,14 @@ export const AdminAnalyticsController = {
         subjectMap.get(subName)!.scores.push(r.percentage);
       });
 
-      const subjectWisePerformance = Array.from(subjectMap.values()).map(sub => {
+      const subjectPerformance = Array.from(subjectMap.values()).map(sub => {
         const avg = Math.round(sub.scores.reduce((a, b) => a + b, 0) / sub.scores.length);
         const { category: cat, color } = classifyScore(avg, thresholds);
         return {
+          subject: sub.subjectName,
           subjectName: sub.subjectName,
           averageScore: avg,
+          testCount: sub.scores.length,
           assessmentsCount: sub.scores.length,
           category: cat,
           color
@@ -215,7 +233,7 @@ export const AdminAnalyticsController = {
       });
 
       // Student performance table records
-      const studentPerformanceRows: any[] = [];
+      const studentRecords: any[] = [];
       const studentsRequiringSupport: any[] = [];
 
       studentMetricsMap.forEach((data, sId) => {
@@ -226,6 +244,7 @@ export const AdminAnalyticsController = {
           const highestScore = Math.round(Math.max(...data.scores));
 
           const row = {
+            id: s.id,
             studentId: s.id,
             name: s.user.name,
             email: s.user.email,
@@ -235,11 +254,13 @@ export const AdminAnalyticsController = {
             testsCompleted: data.testsTaken,
             averageScore: avgScore,
             highestScore,
+            performanceCategory: cat,
             category: cat,
-            color
+            color,
+            lastActive: data.lastActive
           };
 
-          studentPerformanceRows.push(row);
+          studentRecords.push(row);
 
           if (cat === 'Needs Improvement') {
             studentsRequiringSupport.push({
@@ -248,9 +269,9 @@ export const AdminAnalyticsController = {
               actionRequired: 'Provide remedial question modules & schedule practice session.'
             });
           }
-        } else if (!category || category === 'all') {
-          // Include enrolled students who haven't attempted if no category filter
-          studentPerformanceRows.push({
+        } else if (!categoryFilter || categoryFilter === 'all') {
+          studentRecords.push({
+            id: s.id,
             studentId: s.id,
             name: s.user.name,
             email: s.user.email,
@@ -260,20 +281,22 @@ export const AdminAnalyticsController = {
             testsCompleted: 0,
             averageScore: 0,
             highestScore: 0,
+            performanceCategory: 'Not Attempted',
             category: 'Not Attempted',
-            color: '#94a3b8'
+            color: '#94a3b8',
+            lastActive: null
           });
         }
       });
 
-      // Sort performance table descending by average score
-      studentPerformanceRows.sort((a, b) => b.averageScore - a.averageScore);
+      // Sort descending by average score
+      studentRecords.sort((a, b) => b.averageScore - a.averageScore);
 
       // KPI Calculations
       const totalStudents = students.length;
-      const totalAssessments = (await prisma.exam.count({
+      const totalAssessments = await prisma.exam.count({
         where: effectiveCollegeId ? { OR: [{ collegeId: effectiveCollegeId }, { collegeId: null }] } : {}
-      }));
+      });
       const completedAssessments = filteredResults.length;
       const allPercentages = filteredResults.map(r => r.percentage);
       const averageStudentScore = allPercentages.length > 0
@@ -281,15 +304,20 @@ export const AdminAnalyticsController = {
         : 0;
 
       const categoryDistribution = [
-        { name: 'Exceptional', count: categoryDistributionCounts['Exceptional'] || 0, color: '#10b981' },
-        { name: 'Good', count: categoryCounts(categoryDistributionCounts['Good']), color: '#3b82f6' },
-        { name: 'Average', count: categoryDistributionCounts['Average'] || 0, color: '#f59e0b' },
-        { name: 'Needs Improvement', count: categoryDistributionCounts['Needs Improvement'] || 0, color: '#ef4444' }
+        { category: 'Exceptional', name: 'Exceptional', count: categoryDistributionCounts['Exceptional'] || 0, color: '#10b981' },
+        { category: 'Good', name: 'Good', count: categoryCounts(categoryDistributionCounts['Good']), color: '#3b82f6' },
+        { category: 'Average', name: 'Average', count: categoryDistributionCounts['Average'] || 0, color: '#f59e0b' },
+        { category: 'Needs Improvement', name: 'Needs Improvement', count: categoryDistributionCounts['Needs Improvement'] || 0, color: '#ef4444' }
       ];
 
       return res.status(200).json({
         isSuperAdmin,
         authorizedCollegeId,
+        totalStudents,
+        totalAssessments,
+        completedAssessments,
+        averageStudentScore,
+        studentsNeedingImprovement: studentsRequiringSupport.length,
         kpiCards: {
           totalStudents,
           totalAssessments,
@@ -298,10 +326,12 @@ export const AdminAnalyticsController = {
           studentsNeedingImprovement: studentsRequiringSupport.length
         },
         categoryDistribution,
-        assessmentWiseComparison: assessmentWiseComparison.slice(0, 10),
-        subjectWisePerformance,
+        subjectPerformance,
+        subjectWisePerformance: subjectPerformance,
+        studentRecords,
+        studentPerformanceTable: studentRecords,
         studentsRequiringSupport: studentsRequiringSupport.slice(0, 15),
-        studentPerformanceTable: studentPerformanceRows
+        assessmentWiseComparison: assessmentWiseComparison.slice(0, 10)
       });
     } catch (error) {
       next(error);
@@ -343,28 +373,69 @@ export const AdminAnalyticsController = {
         orderBy: { id: 'desc' }
       });
 
+      const studentExams = await prisma.studentExam.findMany({
+        where: { studentId }
+      });
+      const seMap = new Map<string, any>();
+      studentExams.forEach(se => seMap.set(se.examId, se));
+
       const thresholds = await getActiveThresholds();
 
-      const assessmentHistory = results.map(r => {
+      const assessments = results.map(r => {
         const { category, color } = classifyScore(r.percentage, thresholds);
+        const se = seMap.get(r.examId);
+        const timeSpent = r.totalActiveTimeSeconds || (se?.submittedAt && se?.startedAt
+          ? Math.max(0, Math.round((new Date(se.submittedAt).getTime() - new Date(se.startedAt).getTime()) / 1000))
+          : 0);
+
         return {
+          resultId: r.id,
           id: r.id,
           examId: r.examId,
           examTitle: r.exam.title,
+          subject: r.exam.subject?.subjectName || 'General',
           subjectName: r.exam.subject?.subjectName || 'General',
           percentage: r.percentage,
+          score: se?.score || Math.round((r.percentage / 100) * (r.exam.totalMarks || 10)),
+          totalPoints: r.exam.totalMarks || 10,
           rank: r.rank || 1,
           category,
+          performanceCategory: category,
           color,
+          date: (se?.submittedAt || r.exam.startDate).toISOString(),
+          timeSpentSeconds: timeSpent,
           status: r.status
         };
       });
 
       const scores = results.map(r => r.percentage);
-      const avgScore = scores.length > 0 ? Math.round(scores.reduce((a, b) => a + b, 0) / scores.length) : 0;
+      const avgScore = scores.length > 0 ? Math.round((scores.reduce((a, b) => a + b, 0) / scores.length) * 10) / 10 : 0;
       const { category: overallCat, color: overallColor } = classifyScore(avgScore, thresholds);
 
-      return res.status(200).json({
+      const timingList = results.map(r => r.averageQuestionTimeSeconds).filter((t): t is number => typeof t === 'number' && t > 0);
+      const avgTimePerQuestion = timingList.length > 0
+        ? Math.round((timingList.reduce((a, b) => a + b, 0) / timingList.length) * 10) / 10
+        : 0;
+
+      // Subject mastery breakdown
+      const subjectMap = new Map<string, { scores: number[]; testsTaken: number }>();
+      results.forEach(r => {
+        const sName = r.exam?.subject?.subjectName || 'General';
+        if (!subjectMap.has(sName)) {
+          subjectMap.set(sName, { scores: [], testsTaken: 0 });
+        }
+        const sm = subjectMap.get(sName)!;
+        sm.scores.push(r.percentage);
+        sm.testsTaken += 1;
+      });
+
+      const subjectBreakdown = Array.from(subjectMap.entries()).map(([sub, data]) => ({
+        subject: sub,
+        testsTaken: data.testsTaken,
+        averageScore: Math.round(data.scores.reduce((a, b) => a + b, 0) / data.scores.length)
+      }));
+
+      const profilePayload = {
         student: {
           id: student.id,
           name: student.user.name,
@@ -374,15 +445,28 @@ export const AdminAnalyticsController = {
           department: student.department?.departmentName || 'N/A',
           year: student.year
         },
+        metrics: {
+          totalTests: results.length,
+          averageScore: avgScore,
+          highestScore: scores.length > 0 ? Math.round(Math.max(...scores)) : 0,
+          performanceCategory: overallCat,
+          overallCategory: overallCat,
+          averageTimePerQuestion: avgTimePerQuestion
+        },
         summary: {
           totalTests: results.length,
           averageScore: avgScore,
-          highestScore: scores.length > 0 ? Math.max(...scores) : 0,
+          highestScore: scores.length > 0 ? Math.round(Math.max(...scores)) : 0,
           overallCategory: overallCat,
-          overallColor
+          overallColor,
+          performanceCategory: overallCat
         },
-        assessmentHistory
-      });
+        assessments,
+        assessmentHistory: assessments,
+        subjectBreakdown
+      };
+
+      return res.status(200).json(profilePayload);
     } catch (error) {
       next(error);
     }
@@ -392,4 +476,3 @@ export const AdminAnalyticsController = {
 function categoryCounts(val: any): number {
   return typeof val === 'number' ? val : 0;
 }
-
