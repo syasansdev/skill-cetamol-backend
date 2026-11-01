@@ -6,6 +6,53 @@ import { AuthRequest } from '../middleware/auth';
 import { cleanQuestionText, pseudoRandomShuffle, getAssignedExamQuestions, evaluateExamAnswers } from '../utils/examUtils';
 export { cleanQuestionText, pseudoRandomShuffle, getAssignedExamQuestions };
 
+async function saveQuestionTimingsSafe(studentExamId: string, questionTimings: any) {
+  if (!questionTimings) return;
+  const timingsList: { questionId: string; seconds: number }[] = [];
+  if (Array.isArray(questionTimings)) {
+    for (const qt of questionTimings) {
+      if (qt.questionId && typeof qt.timeSpentSeconds === 'number') {
+        timingsList.push({ questionId: qt.questionId, seconds: Math.round(qt.timeSpentSeconds) });
+      }
+    }
+  } else if (typeof questionTimings === 'object') {
+    for (const [qId, sec] of Object.entries(questionTimings)) {
+      if (qId && typeof sec === 'number') {
+        timingsList.push({ questionId: qId, seconds: Math.round(Number(sec)) });
+      }
+    }
+  }
+
+  for (const item of timingsList) {
+    try {
+      await prisma.questionTiming.upsert({
+        where: { studentExamId_questionId: { studentExamId, questionId: item.questionId } },
+        update: { timeSpentSeconds: item.seconds },
+        create: { studentExamId, questionId: item.questionId, timeSpentSeconds: item.seconds }
+      });
+    } catch (upsertErr) {
+      // Fallback if unique constraint is missing on the database table
+      try {
+        const existing = await prisma.questionTiming.findFirst({
+          where: { studentExamId, questionId: item.questionId }
+        });
+        if (existing) {
+          await prisma.questionTiming.update({
+            where: { id: existing.id },
+            data: { timeSpentSeconds: item.seconds }
+          });
+        } else {
+          await prisma.questionTiming.create({
+            data: { studentExamId, questionId: item.questionId, timeSpentSeconds: item.seconds }
+          });
+        }
+      } catch (fallbackErr) {
+        console.warn('Failed saving question timing:', fallbackErr);
+      }
+    }
+  }
+}
+
 export const StudentController = {
   // 1. Get Exams for Student Dashboard
   getExams: async (req: AuthRequest, res: Response, next: NextFunction) => {
@@ -497,27 +544,7 @@ export const StudentController = {
 
       // Persist question timings if provided
       if (questionTimings) {
-        if (Array.isArray(questionTimings)) {
-          for (const qt of questionTimings) {
-            if (qt.questionId && typeof qt.timeSpentSeconds === 'number') {
-              await prisma.questionTiming.upsert({
-                where: { studentExamId_questionId: { studentExamId: studentExam.id, questionId: qt.questionId } },
-                update: { timeSpentSeconds: Math.round(qt.timeSpentSeconds) },
-                create: { studentExamId: studentExam.id, questionId: qt.questionId, timeSpentSeconds: Math.round(qt.timeSpentSeconds) }
-              });
-            }
-          }
-        } else if (typeof questionTimings === 'object') {
-          for (const [qId, sec] of Object.entries(questionTimings)) {
-            if (qId && typeof sec === 'number') {
-              await prisma.questionTiming.upsert({
-                where: { studentExamId_questionId: { studentExamId: studentExam.id, questionId: qId } },
-                update: { timeSpentSeconds: Math.round(Number(sec)) },
-                create: { studentExamId: studentExam.id, questionId: qId, timeSpentSeconds: Math.round(Number(sec)) }
-              });
-            }
-          }
-        }
+        await saveQuestionTimingsSafe(studentExam.id, questionTimings);
       }
 
       // Compute total active question time & average question time
@@ -983,27 +1010,7 @@ export const StudentController = {
 
       // Upsert QuestionTimings if provided
       if (questionTimings) {
-        if (Array.isArray(questionTimings)) {
-          for (const qt of questionTimings) {
-            if (qt.questionId && typeof qt.timeSpentSeconds === 'number') {
-              await prisma.questionTiming.upsert({
-                where: { studentExamId_questionId: { studentExamId: studentExam.id, questionId: qt.questionId } },
-                update: { timeSpentSeconds: Math.round(qt.timeSpentSeconds) },
-                create: { studentExamId: studentExam.id, questionId: qt.questionId, timeSpentSeconds: Math.round(qt.timeSpentSeconds) }
-              });
-            }
-          }
-        } else if (typeof questionTimings === 'object') {
-          for (const [qId, sec] of Object.entries(questionTimings)) {
-            if (qId && typeof sec === 'number') {
-              await prisma.questionTiming.upsert({
-                where: { studentExamId_questionId: { studentExamId: studentExam.id, questionId: qId } },
-                update: { timeSpentSeconds: Math.round(Number(sec)) },
-                create: { studentExamId: studentExam.id, questionId: qId, timeSpentSeconds: Math.round(Number(sec)) }
-              });
-            }
-          }
-        }
+        await saveQuestionTimingsSafe(studentExam.id, questionTimings);
       }
 
       // Save Student Answers: Delete existing for this exam and insert

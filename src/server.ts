@@ -134,7 +134,10 @@ async function ensureDatabaseSchemaSynced() {
         "collegeId" TEXT NOT NULL,
         "status" TEXT NOT NULL DEFAULT 'published',
         "publishedAt" TIMESTAMP(3) DEFAULT CURRENT_TIMESTAMP
-      )`
+      )`,
+      `CREATE UNIQUE INDEX IF NOT EXISTS "QuestionTiming_studentExamId_questionId_key" ON "QuestionTiming"("studentExamId", "questionId")`,
+      `CREATE UNIQUE INDEX IF NOT EXISTS "InstitutionAssessment_examId_collegeId_key" ON "InstitutionAssessment"("examId", "collegeId")`,
+      `CREATE UNIQUE INDEX IF NOT EXISTS "PerformanceThreshold_category_key" ON "PerformanceThreshold"("category")`
     ];
 
     for (const stmt of statements) {
