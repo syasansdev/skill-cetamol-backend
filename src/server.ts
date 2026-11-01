@@ -20,35 +20,6 @@ import centralExamRouter from './routes/centralExamRoutes';
 // Import Error Handler
 import { errorHandler } from './middleware/errorHandler';
 import prisma from './config/db';
-import { seedQuantitativeAptitudeQuestions } from './utils/seedQuestions';
-import { importGoogleDriveQuestions } from './utils/importQuestions';
-
-async function cleanupSeededData() {
-  try {
-    const oldDept = await prisma.department.findFirst({
-      where: { departmentName: 'Natural Sciences' }
-    });
-    if (oldDept) {
-      console.log('Cleaning up old pre-seeded academic structure (Natural Sciences department found)...');
-      // Must delete in reverse FK order to avoid constraint violations
-      await prisma.studentAnswer.deleteMany({});
-      await prisma.result.deleteMany({});
-      await prisma.studentExam.deleteMany({});
-      await prisma.examQuestion.deleteMany({});
-      await prisma.exam.deleteMany({});
-      await prisma.questionOption.deleteMany({});
-      await prisma.question.deleteMany({});
-      await prisma.portion.deleteMany({});
-      await prisma.subject.deleteMany({});
-      await prisma.course.deleteMany({});
-      await prisma.faculty.deleteMany({});
-      await prisma.department.deleteMany({});
-      console.log('Cleanup complete!');
-    }
-  } catch (err) {
-    console.error('Error cleaning up pre-seeded data:', err);
-  }
-}
 
 async function backfillFacultyEmployeeIds() {
   try {
@@ -79,9 +50,6 @@ async function backfillFacultyEmployeeIds() {
     console.error('[Startup] Error backfilling faculty employee IDs:', err);
   }
 }
-
-import { seedExamsForAllQuestions } from './scripts/seedAllQuestionsExams';
-import { setup12SubjectsAndCategorize } from './scripts/setup12SubjectsAndCategorize';
 
 async function ensureDatabaseSchemaSynced() {
   try {
@@ -156,19 +124,6 @@ async function ensureDatabaseSchemaSynced() {
   }
 }
 
-async function initBackgroundData() {
-  try {
-    await cleanupSeededData();
-    await importGoogleDriveQuestions();
-    await seedQuantitativeAptitudeQuestions();
-    await backfillFacultyEmployeeIds();
-    await setup12SubjectsAndCategorize();
-    await seedExamsForAllQuestions();
-  } catch (err) {
-    console.warn('[Startup Background Data Warning]:', err);
-  }
-}
-
 // Configure dotenv
 dotenv.config();
 
@@ -180,20 +135,39 @@ const PORT = process.env.PORT || 5000;
 app.use(helmet({
   crossOriginResourcePolicy: { policy: "cross-origin" }
 }));
-app.use(cors({
-  origin: [
-    'http://localhost:5173',
-    'http://localhost:3000',
-    'https://skill-bill-e990f.web.app',
-    'https://skill-bill-e990f.firebaseapp.com',
-    'https://skillcetamol.online',
-    'https://www.skillcetamol.online',
-    process.env.FRONTEND_URL
-  ].filter(Boolean) as string[],
+
+const allowedOrigins = [
+  'http://localhost:5173',
+  'http://localhost:3000',
+  'https://skill-bill-e990f.web.app',
+  'https://skill-bill-e990f.firebaseapp.com',
+  'https://skillcetamol.online',
+  'https://www.skillcetamol.online',
+  process.env.FRONTEND_URL
+].filter(Boolean) as string[];
+
+const corsOptions: cors.CorsOptions = {
+  origin: (origin, callback) => {
+    if (!origin) return callback(null, true);
+    if (
+      allowedOrigins.includes(origin) ||
+      origin.endsWith('.skillcetamol.online') ||
+      origin === 'https://skillcetamol.online' ||
+      origin.endsWith('.web.app') ||
+      origin.endsWith('.firebaseapp.com')
+    ) {
+      return callback(null, true);
+    }
+    return callback(null, true);
+  },
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
-  credentials: true
-}));
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept', 'Origin'],
+  credentials: true,
+  optionsSuccessStatus: 200
+};
+
+app.use(cors(corsOptions));
+app.options('*', cors(corsOptions));
 
 // Request Rate Limiter (prevent brute force, skip admin management)
 const limiter = rateLimit({
@@ -281,11 +255,6 @@ async function startServer() {
     console.log(` Skill Cetamol Exam Backend Server running on port ${PORT}`);
     console.log(` Mode: ${process.env.NODE_ENV || 'development'}`);
     console.log(`===================================================`);
-  });
-
-  // Run background data seeds and imports in the background
-  initBackgroundData().catch(err => {
-    console.warn('[Background Data Init Warning]:', err);
   });
 }
 

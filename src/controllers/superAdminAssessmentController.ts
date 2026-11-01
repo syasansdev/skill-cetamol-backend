@@ -19,6 +19,8 @@ export const SuperAdminAssessmentController = {
         subjectId,
         departmentId,
         duration,
+        durationMinutes,
+        subject,
         totalMarks,
         questionCount,
         negativeMarking,
@@ -36,8 +38,51 @@ export const SuperAdminAssessmentController = {
         return res.status(400).json({ message: 'Assessment title is required.' });
       }
 
-      if (!duration || Number(duration) <= 0) {
+      const finalDuration = Number(duration || durationMinutes || 60);
+      if (!finalDuration || finalDuration <= 0) {
         return res.status(400).json({ message: 'A positive test duration in minutes is required.' });
+      }
+
+      // Resolve subjectId if either subjectId or subject name string was provided
+      let resolvedSubjectId = subjectId || null;
+      if (!resolvedSubjectId && subject) {
+        const foundSub = await prisma.subject.findFirst({
+          where: {
+            OR: [
+              { id: subject },
+              { subjectName: { equals: subject, mode: 'insensitive' } }
+            ]
+          }
+        });
+        if (foundSub) {
+          resolvedSubjectId = foundSub.id;
+        } else if (typeof subject === 'string' && subject.trim()) {
+          try {
+            let course = await prisma.course.findFirst();
+            if (!course) {
+              let dept = await prisma.department.findFirst();
+              if (!dept) {
+                dept = await prisma.department.create({ data: { departmentName: 'General Academics' } });
+              }
+              course = await prisma.course.create({
+                data: {
+                  courseName: 'General Degree',
+                  departmentId: dept.id
+                }
+              });
+            }
+            const createdSub = await prisma.subject.create({
+              data: {
+                subjectName: subject.trim(),
+                courseId: course.id,
+                semester: 1
+              }
+            });
+            resolvedSubjectId = createdSub.id;
+          } catch {
+            // ignore if creation conflict occurs
+          }
+        }
       }
 
       // Find or create admin faculty evaluator profile to anchor exam
@@ -67,11 +112,11 @@ export const SuperAdminAssessmentController = {
           title: title.trim(),
           description: description?.trim() || 'Centralized Assessment administered by Super Admin',
           instructions: instructions?.trim() || null,
-          subjectId: subjectId || null,
+          subjectId: resolvedSubjectId,
           facultyId: faculty.id,
           departmentId: departmentId || null,
           collegeId: null, // null indicates centrally created
-          duration: Number(duration),
+          duration: finalDuration,
           totalMarks: totalMarks ? Number(totalMarks) : (Number(questionCount || 10) * (marksPerQuestion || 1)),
           questionCount: questionCount ? Number(questionCount) : 10,
           negativeMarking: !!negativeMarking,
@@ -279,23 +324,31 @@ export const SuperAdminAssessmentController = {
         title: e.title,
         description: e.description,
         instructions: e.instructions || '',
+        subject: e.subject?.subjectName || 'General Evaluation',
         subjectName: e.subject?.subjectName || 'General Evaluation',
         subjectId: e.subjectId,
         duration: e.duration,
+        durationMinutes: e.duration,
         totalMarks: e.totalMarks,
+        passingMarks: Math.round(Number(e.totalMarks || 100) * 0.4),
         questionCount: e.questionCount || e._count?.examQuestions || 0,
+        questionsCount: e.questionCount || e._count?.examQuestions || 0,
         startDate: e.startDate ? e.startDate.toISOString() : new Date().toISOString(),
         endDate: e.endDate ? e.endDate.toISOString() : new Date().toISOString(),
         status: e.status,
         publishedStatus: e.publishedStatus || 'published',
         assignedInstitutionsCount: e.institutionAssessments ? e.institutionAssessments.length : 0,
         assignedInstitutions: (e.institutionAssessments || []).map(ia => ({
+          id: ia.id,
           collegeId: ia.collegeId,
           collegeName: ia.college?.collegeName || 'Unknown College',
-          status: ia.status
+          collegeCode: ia.college?.code || '',
+          status: ia.status,
+          publishedAt: ia.publishedAt ? ia.publishedAt.toISOString() : ''
         })),
         completedCount: e._count?.results || 0,
-        startedCount: e._count?.studentExams || 0
+        startedCount: e._count?.studentExams || 0,
+        createdAt: e.startDate ? e.startDate.toISOString() : new Date().toISOString()
       }));
 
       return res.status(200).json(formatted);
