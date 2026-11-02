@@ -461,9 +461,9 @@ export const FacultyController = {
       const parsedQuestionCount = questionCount !== undefined && Number(questionCount) > 0
         ? Math.min(Number(questionCount), questionIds.length > 0 ? questionIds.length : Number(questionCount))
         : (questionIds.length > 0 ? questionIds.length : 10);
-      const parsedMarksPerQuestion = marksPerQuestion !== undefined ? Number(marksPerQuestion) : 1;
-      const parsedNegativeMarks = negativeMarks !== undefined ? Number(negativeMarks) : 0;
-      const parsedNegativeMarking = Boolean(negativeMarking);
+      const parsedMarksPerQuestion = marksPerQuestion !== undefined && Number(marksPerQuestion) > 0 ? Number(marksPerQuestion) : 1;
+      const parsedNegativeMarking = (negativeMarking === true || negativeMarking === 'true' || negativeMarking === 'yes' || negativeMarking === 1 || negativeMarking === '1');
+      const parsedNegativeMarks = parsedNegativeMarking && negativeMarks !== undefined ? Math.max(0, Number(negativeMarks)) : 0;
 
       const totalMarks = Math.round(parsedQuestionCount * parsedMarksPerQuestion);
 

@@ -117,6 +117,9 @@ async function ensureDatabaseSchemaSynced() {
       `CREATE UNIQUE INDEX IF NOT EXISTS "QuestionTiming_studentExamId_questionId_key" ON "QuestionTiming"("studentExamId", "questionId")`,
       `CREATE UNIQUE INDEX IF NOT EXISTS "InstitutionAssessment_examId_collegeId_key" ON "InstitutionAssessment"("examId", "collegeId")`,
       `CREATE UNIQUE INDEX IF NOT EXISTS "PerformanceThreshold_category_key" ON "PerformanceThreshold"("category")`,
+      `UPDATE "Exam"
+       SET "negativeMarking" = false, "negativeMarks" = 0.0
+       WHERE "negativeMarking" = true AND ("negativeMarks" = 0 OR "negativeMarks" IS NULL)`,
       `UPDATE "Result" r
        SET "percentage" = ROUND(((se."score"::numeric / GREATEST(COALESCE(e."totalMarks", 100), 1)::numeric) * 100)::numeric, 2),
            "status" = CASE WHEN (se."score"::numeric / GREATEST(COALESCE(e."totalMarks", 100), 1)::numeric) >= 0.4 THEN 'pass' ELSE 'fail' END

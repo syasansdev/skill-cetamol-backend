@@ -369,10 +369,12 @@ export const AdminController = {
     try {
       const { name, email: rawEmail, password, facultyId, collegeId, role, departmentId } = req.body;
       const email = (rawEmail || '').trim().toLowerCase();
-      const cleanPassword = password && password.trim() ? password.trim() : 'faculty123';
+      const cleanPassword = password && password.trim() ? password.trim() : 'admin123';
 
-      // Check if email already exists
-      const existingUser = await prisma.user.findUnique({ where: { email } });
+      // Check if email already exists case-insensitively
+      const existingUser = await prisma.user.findFirst({
+        where: { email: { equals: email, mode: 'insensitive' } }
+      });
       if (existingUser) {
         return res.status(400).json({
           message: `The email "${email}" is already registered to an existing account (${existingUser.name}). Please use a different email address.`,

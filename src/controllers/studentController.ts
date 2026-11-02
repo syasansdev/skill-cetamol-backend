@@ -638,6 +638,9 @@ export const StudentController = {
         studentName: student.user.name,
         studentRollNo: student.registerNumber,
         score: evalResult.score,
+        grossScore: evalResult.grossScore,
+        negativeDeduction: evalResult.negativeDeduction,
+        negativeMarkingActive: evalResult.negativeMarkingActive,
         totalPoints: evalResult.totalPoints,
         totalQuestions: evalResult.assignedEqs.length,
         percentage: evalResult.percentage,
@@ -725,19 +728,19 @@ export const StudentController = {
         const evalRes = evaluateExamAnswers(r.exam, student.id, ansMap);
 
         const totalPoints = evalRes.totalPoints || (r.exam?.totalMarks || 10);
-        const finalPercentage = (r.percentage !== null && r.percentage !== undefined && (!hasAnswers || (evalRes.percentage === 0 && r.percentage > 0)))
-          ? r.percentage
-          : evalRes.percentage;
+        const finalPercentage = hasAnswers
+          ? evalRes.percentage
+          : (r.percentage !== null && r.percentage !== undefined ? r.percentage : evalRes.percentage);
 
-        const finalScore = (se && typeof se.score === 'number' && se.score > 0)
-          ? se.score
-          : (evalRes.score > 0 ? evalRes.score : Math.round((finalPercentage / 100) * totalPoints));
+        const finalScore = hasAnswers
+          ? evalRes.score
+          : ((se && typeof se.score === 'number' && se.score > 0) ? se.score : Math.round((finalPercentage / 100) * totalPoints));
 
         const finalCategory = r.performanceCategory || evalRes.performanceCategory;
         const finalStatus = r.status || evalRes.status;
 
         // Auto-heal result record only if real answers were evaluated and discrepancy exists
-        if (hasAnswers && evalRes.score > 0 && (r.percentage !== evalRes.percentage || !r.performanceCategory)) {
+        if (hasAnswers && (r.percentage !== evalRes.percentage || !r.performanceCategory)) {
           prisma.result.update({
             where: { id: r.id },
             data: {
@@ -747,6 +750,12 @@ export const StudentController = {
               performanceCategory: evalRes.performanceCategory
             }
           }).catch(() => {});
+          if (se && se.score !== evalRes.score) {
+            prisma.studentExam.update({
+              where: { id: se.id },
+              data: { score: evalRes.score }
+            }).catch(() => {});
+          }
         }
 
         let timeTakenSeconds = 0;
@@ -769,6 +778,9 @@ export const StudentController = {
           studentName: student.user?.name || student.registerNumber || 'Student',
           studentRollNo: student.registerNumber,
           score: finalScore,
+          grossScore: evalRes.grossScore,
+          negativeDeduction: evalRes.negativeDeduction,
+          negativeMarkingActive: evalRes.negativeMarkingActive,
           totalPoints: totalPoints,
           percentage: finalPercentage,
           status: finalStatus,
@@ -852,19 +864,19 @@ export const StudentController = {
       const evalRes = evaluateExamAnswers(result.exam, student.id, ansMap);
 
       const totalPoints = evalRes.totalPoints || (result.exam?.totalMarks || 10);
-      const finalPercentage = (result.percentage !== null && result.percentage !== undefined && (!hasAnswers || (evalRes.percentage === 0 && result.percentage > 0)))
-        ? result.percentage
-        : evalRes.percentage;
+      const finalPercentage = hasAnswers
+        ? evalRes.percentage
+        : (result.percentage !== null && result.percentage !== undefined ? result.percentage : evalRes.percentage);
 
-      const finalScore = (studentExam && typeof studentExam.score === 'number' && studentExam.score > 0)
-        ? studentExam.score
-        : (evalRes.score > 0 ? evalRes.score : Math.round((finalPercentage / 100) * totalPoints));
+      const finalScore = hasAnswers
+        ? evalRes.score
+        : ((studentExam && typeof studentExam.score === 'number' && studentExam.score > 0) ? studentExam.score : Math.round((finalPercentage / 100) * totalPoints));
 
       const finalCategory = result.performanceCategory || evalRes.performanceCategory;
       const finalStatus = result.status || evalRes.status;
 
       // Auto-heal result record only if real answers were evaluated and discrepancy exists
-      if (hasAnswers && evalRes.score > 0 && (result.percentage !== evalRes.percentage || !result.performanceCategory)) {
+      if (hasAnswers && (result.percentage !== evalRes.percentage || !result.performanceCategory)) {
         prisma.result.update({
           where: { id: result.id },
           data: {
@@ -874,6 +886,12 @@ export const StudentController = {
             performanceCategory: evalRes.performanceCategory
           }
         }).catch(() => {});
+        if (studentExam && studentExam.score !== evalRes.score) {
+          prisma.studentExam.update({
+            where: { id: studentExam.id },
+            data: { score: evalRes.score }
+          }).catch(() => {});
+        }
       }
 
       // Question timings mapping
@@ -924,6 +942,10 @@ export const StudentController = {
         studentName: student.user?.name || student.registerNumber || 'Student',
         studentRollNo: student.registerNumber,
         score: finalScore,
+        grossScore: evalRes.grossScore,
+        negativeDeduction: evalRes.negativeDeduction,
+        negativeMarkingActive: evalRes.negativeMarkingActive,
+        negativeMarks: evalRes.negativeMarkingActive ? (result.exam?.negativeMarks || 0) : 0,
         totalPoints: totalPoints,
         percentage: finalPercentage,
         status: finalStatus,

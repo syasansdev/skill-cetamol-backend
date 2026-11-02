@@ -88,6 +88,9 @@ export interface EvaluationResult {
   wrongCount: number;
   skippedCount: number;
   score: number;
+  grossScore: number;
+  negativeDeduction: number;
+  negativeMarkingActive: boolean;
   totalPoints: number;
   percentage: number;
   status: 'pass' | 'fail';
@@ -108,10 +111,12 @@ export function evaluateExamAnswers(
   studentExamId: string = ''
 ): EvaluationResult {
   const assignedEqs = getAssignedExamQuestions(exam, studentId);
-  const marksPerQ = exam.marksPerQuestion && exam.marksPerQuestion > 0 ? exam.marksPerQuestion : 1;
-  const negMarks = exam.negativeMarking ? (exam.negativeMarks || 0) : 0;
+  const marksPerQ = exam.marksPerQuestion && exam.marksPerQuestion > 0 ? Number(exam.marksPerQuestion) : 1;
+  const isNegativeMarkingActive = (exam.negativeMarking === true || exam.negativeMarking === 'true' || exam.negativeMarking === 'yes');
+  const negMarks = isNegativeMarkingActive ? Math.max(0, Number(exam.negativeMarks) || 0) : 0;
 
-  let rawScore = 0;
+  let grossScore = 0;
+  let negativeDeduction = 0;
   let correctCount = 0;
   let wrongCount = 0;
   let skippedCount = 0;
@@ -224,12 +229,12 @@ export function evaluateExamAnswers(
 
       if (isCorrect) {
         correctCount++;
-        rawScore += marksPerQ;
+        grossScore += marksPerQ;
         marksAwarded = marksPerQ;
       } else {
         wrongCount++;
         if (negMarks > 0) {
-          rawScore -= negMarks;
+          negativeDeduction += negMarks;
           marksAwarded = -negMarks;
         } else {
           marksAwarded = 0;
@@ -261,7 +266,12 @@ export function evaluateExamAnswers(
     });
   }
 
-  const finalScore = correctCount === 0 ? 0 : Math.max(0, rawScore);
+  // Net score: gross score minus negative marking deduction (if negative marking active)
+  const netScore = (isNegativeMarkingActive && negMarks > 0)
+    ? Math.max(0, grossScore - negativeDeduction)
+    : grossScore;
+
+  const finalScore = correctCount === 0 ? 0 : Number(netScore.toFixed(2));
   const totalPoints = assignedEqs.length > 0
     ? Math.round(assignedEqs.length * marksPerQ)
     : (exam.totalMarks || 10);
@@ -291,6 +301,9 @@ export function evaluateExamAnswers(
     wrongCount,
     skippedCount,
     score: finalScore,
+    grossScore: Number(grossScore.toFixed(2)),
+    negativeDeduction: Number(negativeDeduction.toFixed(2)),
+    negativeMarkingActive: isNegativeMarkingActive && negMarks > 0,
     totalPoints,
     percentage,
     status,
