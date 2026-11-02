@@ -118,15 +118,15 @@ async function ensureDatabaseSchemaSynced() {
       `CREATE UNIQUE INDEX IF NOT EXISTS "InstitutionAssessment_examId_collegeId_key" ON "InstitutionAssessment"("examId", "collegeId")`,
       `CREATE UNIQUE INDEX IF NOT EXISTS "PerformanceThreshold_category_key" ON "PerformanceThreshold"("category")`,
       `UPDATE "Result" r
-       SET "percentage" = ROUND((se."score" / GREATEST(COALESCE(e."totalMarks", 100), 1)::numeric) * 100, 2),
-           "status" = CASE WHEN (se."score" / GREATEST(COALESCE(e."totalMarks", 100), 1)::numeric) >= 0.4 THEN 'pass' ELSE 'fail' END
+       SET "percentage" = ROUND(((se."score"::numeric / GREATEST(COALESCE(e."totalMarks", 100), 1)::numeric) * 100)::numeric, 2),
+           "status" = CASE WHEN (se."score"::numeric / GREATEST(COALESCE(e."totalMarks", 100), 1)::numeric) >= 0.4 THEN 'pass' ELSE 'fail' END
        FROM "StudentExam" se
        JOIN "Exam" e ON e."id" = se."examId"
        WHERE r."studentId" = se."studentId" AND r."examId" = se."examId"
          AND (r."percentage" = 0 OR r."percentage" IS NULL)
          AND se."score" > 0`,
       `UPDATE "StudentExam" se
-       SET "score" = ROUND((r."percentage" / 100.0) * GREATEST(COALESCE(e."totalMarks", 100), 1))
+       SET "score" = ROUND(((r."percentage"::numeric / 100.0) * GREATEST(COALESCE(e."totalMarks", 100), 1)::numeric)::numeric, 2)
        FROM "Result" r
        JOIN "Exam" e ON e."id" = r."examId"
        WHERE r."studentId" = se."studentId" AND r."examId" = se."examId"
