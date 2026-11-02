@@ -395,7 +395,7 @@ export const FacultyController = {
       const {
         title, description, subjectId, duration, startTime, endTime, questions,
         questionCount, negativeMarking, marksPerQuestion, negativeMarks,
-        category, departmentId, targetYears, targetYear
+        category, departmentId, targetYears, targetYear, gradingThresholds
       } = req.body;
 
       let faculty = await prisma.faculty.findUnique({
@@ -575,6 +575,7 @@ export const FacultyController = {
           negativeMarking: parsedNegativeMarking,
           marksPerQuestion: parsedMarksPerQuestion,
           negativeMarks: parsedNegativeMarks,
+          gradingThresholds: gradingThresholds ? (typeof gradingThresholds === 'string' ? gradingThresholds : JSON.stringify(gradingThresholds)) : null,
           status: 'scheduled'
         }
       });
@@ -975,13 +976,51 @@ export const FacultyController = {
         }
 
         const evalRes = evaluateExamAnswers(exam, student.id, ansMap);
-        const correctCount = evalRes.correctCount;
-        const wrongCount = evalRes.wrongCount;
-        const skippedCount = evalRes.skippedCount;
-        const rawScore = evalRes.score;
-        const totalPoints = evalRes.totalPoints;
-        const percentage = evalRes.percentage;
-        const status = evalRes.status;
+        const hasAnswers = Object.keys(ansMap).length > 0;
+        const examTotalMarks = exam.totalMarks || (exam.questionCount ? exam.questionCount * (exam.marksPerQuestion || 1) : 100);
+        const totalPoints = evalRes.totalPoints || examTotalMarks;
+
+        // Sum marks directly recorded in studentAnswers if present
+        const sumMarksAwarded = (se && Array.isArray(se.studentAnswers))
+          ? se.studentAnswers.reduce((acc: number, a: any) => acc + (Number(a.marksAwarded) || 0), 0)
+          : 0;
+
+        // Authoritative resolution of percentage and score
+        let finalPercentage = 0;
+        let finalScore = 0;
+        let finalStatus = 'fail';
+
+        if (hasAnswers && evalRes.score > 0) {
+          finalScore = evalRes.score;
+          finalPercentage = evalRes.percentage;
+          finalStatus = evalRes.status;
+        } else if (r && typeof r.percentage === 'number' && r.percentage > 0) {
+          finalPercentage = r.percentage;
+          finalScore = (se && typeof se.score === 'number' && se.score > 0)
+            ? se.score
+            : (sumMarksAwarded > 0 ? sumMarksAwarded : Math.round((finalPercentage / 100) * totalPoints));
+          finalStatus = r.status || (finalPercentage >= 40 ? 'pass' : 'fail');
+        } else if (se && typeof se.score === 'number' && se.score > 0) {
+          finalScore = se.score;
+          finalPercentage = totalPoints > 0 ? Math.round((finalScore / totalPoints) * 1000) / 10 : 0;
+          finalStatus = finalPercentage >= 40 ? 'pass' : 'fail';
+        } else if (sumMarksAwarded > 0) {
+          finalScore = sumMarksAwarded;
+          finalPercentage = totalPoints > 0 ? Math.round((finalScore / totalPoints) * 1000) / 10 : 0;
+          finalStatus = finalPercentage >= 40 ? 'pass' : 'fail';
+        } else if (r && typeof r.percentage === 'number') {
+          finalPercentage = r.percentage;
+          finalScore = (se && typeof se.score === 'number') ? se.score : Math.round((finalPercentage / 100) * totalPoints);
+          finalStatus = r.status || (finalPercentage >= 40 ? 'pass' : 'fail');
+        } else {
+          finalScore = evalRes.score;
+          finalPercentage = evalRes.percentage;
+          finalStatus = evalRes.status;
+        }
+
+        const rawScore = finalScore;
+        const percentage = finalPercentage;
+        const status = finalStatus;
 
         let timeTakenSeconds = 0;
         if (se && se.submittedAt && se.startedAt) {
@@ -994,17 +1033,17 @@ export const FacultyController = {
           ? se.submittedAt.toISOString()
           : (r?.exam?.endDate ? r.exam.endDate.toISOString() : (exam.endDate ? exam.endDate.toISOString() : new Date().toISOString()));
 
-        // Auto-heal DB Result table in background if discrepancy is present
-        if (r && (r.percentage !== percentage || r.status !== status)) {
+        // Auto-heal DB Result table in background ONLY if real answers evaluated with positive score
+        if (hasAnswers && evalRes.score > 0 && r && (r.percentage !== evalRes.percentage || r.status !== evalRes.status)) {
           prisma.result.update({
             where: { id: r.id },
             data: {
-              percentage,
-              status,
-              grade: percentage >= 90 ? 'A+' : percentage >= 80 ? 'A' : percentage >= 60 ? 'B' : percentage >= 40 ? 'C' : 'F'
+              percentage: evalRes.percentage,
+              status: evalRes.status,
+              grade: evalRes.percentage >= 90 ? 'A+' : evalRes.percentage >= 80 ? 'A' : evalRes.percentage >= 60 ? 'B' : evalRes.percentage >= 40 ? 'C' : 'F'
             }
           }).catch(() => {});
-        } else if (!r && student.id && exam.id) {
+        } else if (!r && student.id && exam.id && finalPercentage > 0) {
           prisma.result.upsert({
             where: {
               studentId_examId: { studentId: student.id, examId: exam.id }
@@ -1012,22 +1051,22 @@ export const FacultyController = {
             create: {
               studentId: student.id,
               examId: exam.id,
-              percentage,
-              status,
-              grade: percentage >= 90 ? 'A+' : percentage >= 80 ? 'A' : percentage >= 60 ? 'B' : percentage >= 40 ? 'C' : 'F'
+              percentage: finalPercentage,
+              status: finalStatus,
+              grade: finalPercentage >= 90 ? 'A+' : finalPercentage >= 80 ? 'A' : finalPercentage >= 60 ? 'B' : finalPercentage >= 40 ? 'C' : 'F'
             },
             update: {
-              percentage,
-              status,
-              grade: percentage >= 90 ? 'A+' : percentage >= 80 ? 'A' : percentage >= 60 ? 'B' : percentage >= 40 ? 'C' : 'F'
+              percentage: finalPercentage,
+              status: finalStatus,
+              grade: finalPercentage >= 90 ? 'A+' : finalPercentage >= 80 ? 'A' : finalPercentage >= 60 ? 'B' : finalPercentage >= 40 ? 'C' : 'F'
             }
           }).catch(() => {});
         }
 
-        if (se && se.score !== rawScore) {
+        if (se && se.score !== finalScore && finalScore > 0) {
           prisma.studentExam.update({
             where: { id: se.id },
-            data: { score: rawScore }
+            data: { score: finalScore }
           }).catch(() => {});
         }
 
@@ -1047,9 +1086,9 @@ export const FacultyController = {
           percentage,
           status,
           timeTaken: timeTakenSeconds,
-          correctCount,
-          wrongCount,
-          skippedCount,
+          correctCount: evalRes?.correctCount || 0,
+          wrongCount: evalRes?.wrongCount || 0,
+          skippedCount: evalRes?.skippedCount || 0,
           submittedAt: submissionDate
         });
       }

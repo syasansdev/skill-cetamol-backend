@@ -1,7 +1,7 @@
 import { Response, NextFunction } from 'express';
 import prisma from '../config/db';
 import { AuthRequest } from '../middleware/auth';
-import { getActiveThresholds, classifyScore } from '../utils/performanceClassification';
+import { getActiveThresholds, classifyScore, normalizeCategory, GRADE_EMOJIS } from '../utils/performanceClassification';
 
 export const AdminAnalyticsController = {
   // 1. Consolidated Student Performance Dashboard
@@ -175,14 +175,16 @@ export const AdminAnalyticsController = {
 
       // Calculate Category Distribution across all completed results
       const categoryDistributionCounts: Record<string, number> = {
-        'Exceptional': 0,
-        'Good': 0,
-        'Average': 0,
+        'Outstanding': 0,
+        'Proficient': 0,
+        'Competent': 0,
+        'Developing': 0,
         'Needs Improvement': 0
       };
 
       filteredResults.forEach(r => {
-        categoryDistributionCounts[r.calculatedCategory] = (categoryDistributionCounts[r.calculatedCategory] || 0) + 1;
+        const canonical = normalizeCategory(r.calculatedCategory);
+        categoryDistributionCounts[canonical] = (categoryDistributionCounts[canonical] || 0) + 1;
       });
 
       // Assessment-wise comparison
@@ -256,6 +258,9 @@ export const AdminAnalyticsController = {
             highestScore,
             performanceCategory: cat,
             category: cat,
+            grade: cat,
+            emoji: GRADE_EMOJIS[cat] || '📊',
+            displayGrade: `${GRADE_EMOJIS[cat] || '📊'} ${cat}`,
             color,
             lastActive: data.lastActive
           };
@@ -304,10 +309,11 @@ export const AdminAnalyticsController = {
         : 0;
 
       const categoryDistribution = [
-        { category: 'Exceptional', name: 'Exceptional', count: categoryDistributionCounts['Exceptional'] || 0, color: '#10b981' },
-        { category: 'Good', name: 'Good', count: categoryCounts(categoryDistributionCounts['Good']), color: '#3b82f6' },
-        { category: 'Average', name: 'Average', count: categoryDistributionCounts['Average'] || 0, color: '#f59e0b' },
-        { category: 'Needs Improvement', name: 'Needs Improvement', count: categoryDistributionCounts['Needs Improvement'] || 0, color: '#ef4444' }
+        { category: 'Outstanding', name: 'Outstanding', count: categoryDistributionCounts['Outstanding'] || 0, color: '#10b981', emoji: '🌟' },
+        { category: 'Proficient', name: 'Proficient', count: categoryDistributionCounts['Proficient'] || 0, color: '#3b82f6', emoji: '🎯' },
+        { category: 'Competent', name: 'Competent', count: categoryDistributionCounts['Competent'] || 0, color: '#06b6d4', emoji: '✅' },
+        { category: 'Developing', name: 'Developing', count: categoryDistributionCounts['Developing'] || 0, color: '#f59e0b', emoji: '📈' },
+        { category: 'Needs Improvement', name: 'Needs Improvement', count: categoryDistributionCounts['Needs Improvement'] || 0, color: '#ef4444', emoji: '⚠️' }
       ];
 
       return res.status(200).json({
@@ -451,6 +457,9 @@ export const AdminAnalyticsController = {
           highestScore: scores.length > 0 ? Math.round(Math.max(...scores)) : 0,
           performanceCategory: overallCat,
           overallCategory: overallCat,
+          grade: overallCat,
+          emoji: GRADE_EMOJIS[overallCat] || '📊',
+          displayGrade: `${GRADE_EMOJIS[overallCat] || '📊'} ${overallCat}`,
           averageTimePerQuestion: avgTimePerQuestion
         },
         summary: {
@@ -458,6 +467,9 @@ export const AdminAnalyticsController = {
           averageScore: avgScore,
           highestScore: scores.length > 0 ? Math.round(Math.max(...scores)) : 0,
           overallCategory: overallCat,
+          grade: overallCat,
+          emoji: GRADE_EMOJIS[overallCat] || '📊',
+          displayGrade: `${GRADE_EMOJIS[overallCat] || '📊'} ${overallCat}`,
           overallColor,
           performanceCategory: overallCat
         },

@@ -1030,6 +1030,7 @@ export const AdminController = {
       for (let i = 0; i < qIds.length; i += chunkSize) {
         const chunk = qIds.slice(i, i + chunkSize);
         await prisma.$transaction(async (tx) => {
+          await tx.questionTiming.deleteMany({ where: { questionId: { in: chunk } } });
           await tx.studentAnswer.deleteMany({ where: { questionId: { in: chunk } } });
           await tx.examQuestion.deleteMany({ where: { questionId: { in: chunk } } });
           await tx.questionOption.deleteMany({ where: { questionId: { in: chunk } } });
@@ -1039,7 +1040,11 @@ export const AdminController = {
 
       // 5. Clean up subject-level records in transaction with extended timeout
       await prisma.$transaction(async (tx) => {
-        // Any remaining questions (safety check)
+        // Any remaining questions and child records (safety check)
+        await tx.questionTiming.deleteMany({ where: { question: { subjectId: { in: subjectIds } } } });
+        await tx.studentAnswer.deleteMany({ where: { question: { subjectId: { in: subjectIds } } } });
+        await tx.examQuestion.deleteMany({ where: { question: { subjectId: { in: subjectIds } } } });
+        await tx.questionOption.deleteMany({ where: { question: { subjectId: { in: subjectIds } } } });
         await tx.question.deleteMany({ where: { subjectId: { in: subjectIds } } });
         await tx.uploadedDocument.deleteMany({ where: { subjectId: { in: subjectIds } } });
         await tx.portion.deleteMany({ where: { subjectId: { in: subjectIds } } });
@@ -1954,6 +1959,7 @@ export const AdminController = {
   // 30. College Management
   getColleges: async (req: AuthRequest, res: Response, next: NextFunction) => {
     try {
+      // Order by createdAt ascending to compute authoritative sequential creation IDs (1, 2, ... 11)
       const colleges = await prisma.college.findMany({
         where: {
           NOT: [
@@ -1967,11 +1973,13 @@ export const AdminController = {
           departments: true,
           _count: { select: { students: true, departments: true } }
         },
-        orderBy: { collegeName: 'asc' }
+        orderBy: { createdAt: 'asc' }
       });
 
-      const formatted = colleges.map(c => ({
+      const formatted = colleges.map((c, index) => ({
         id: c.id,
+        collegeIdNumber: index + 1,
+        creationNumber: index + 1,
         collegeName: c.collegeName,
         code: c.code,
         createdAt: c.createdAt,

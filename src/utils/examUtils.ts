@@ -1,4 +1,4 @@
-import { classifyScore } from './performanceClassification';
+import { classifyScore, DEFAULT_THRESHOLDS, PerformanceTier } from './performanceClassification';
 
 /**
  * Exam Utilities
@@ -91,7 +91,9 @@ export interface EvaluationResult {
   totalPoints: number;
   percentage: number;
   status: 'pass' | 'fail';
-  performanceCategory: 'Exceptional' | 'Good' | 'Average' | 'Needs Improvement';
+  performanceCategory: PerformanceTier | string;
+  grade?: string;
+  displayGrade?: string;
   answerInserts: AnswerInsertData[];
   detailedQuestions: EvaluatedQuestionDetail[];
 }
@@ -270,7 +272,18 @@ export function evaluateExamAnswers(
 
   const passThreshold = exam.passPercentage || 40;
   const status: 'pass' | 'fail' = (percentage >= passThreshold && finalScore > 0) ? 'pass' : 'fail';
-  const { category: performanceCategory } = classifyScore(percentage);
+  
+  let activeThresholds = DEFAULT_THRESHOLDS;
+  if (exam && exam.gradingThresholds) {
+    try {
+      const parsed = typeof exam.gradingThresholds === 'string' ? JSON.parse(exam.gradingThresholds) : exam.gradingThresholds;
+      if (Array.isArray(parsed) && parsed.length === 5) {
+        activeThresholds = parsed;
+      }
+    } catch {}
+  }
+
+  const { category: performanceCategory, grade, displayGrade } = classifyScore(percentage, activeThresholds);
 
   return {
     assignedEqs,
@@ -282,6 +295,8 @@ export function evaluateExamAnswers(
     percentage,
     status,
     performanceCategory,
+    grade,
+    displayGrade,
     answerInserts,
     detailedQuestions
   };

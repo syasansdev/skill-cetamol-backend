@@ -1,7 +1,7 @@
 import { Response, NextFunction } from 'express';
 import prisma from '../config/db';
 import { AuthRequest } from '../middleware/auth';
-import { getActiveThresholds, classifyScore } from '../utils/performanceClassification';
+import { getActiveThresholds, classifyScore, normalizeCategory, GRADE_EMOJIS } from '../utils/performanceClassification';
 import { evaluateExamAnswers } from '../utils/examUtils';
 
 export const StudentAnalyticsController = {
@@ -89,10 +89,11 @@ export const StudentAnalyticsController = {
           performanceTrend: [],
           assessmentComparison: [],
           categoryDistribution: [
-            { name: 'Exceptional', count: 0, color: '#10b981' },
-            { name: 'Good', count: 0, color: '#3b82f6' },
-            { name: 'Average', count: 0, color: '#f59e0b' },
-            { name: 'Needs Improvement', count: 0, color: '#ef4444' }
+            { name: 'Outstanding', count: 0, color: '#10b981', emoji: '🌟' },
+            { name: 'Proficient', count: 0, color: '#3b82f6', emoji: '🎯' },
+            { name: 'Competent', count: 0, color: '#06b6d4', emoji: '✅' },
+            { name: 'Developing', count: 0, color: '#f59e0b', emoji: '📈' },
+            { name: 'Needs Improvement', count: 0, color: '#ef4444', emoji: '⚠️' }
           ],
           subjectPerformance: [],
           strongestSubjects: [],
@@ -126,9 +127,10 @@ export const StudentAnalyticsController = {
 
       // Category distribution counts
       const categoryCounts: Record<string, number> = {
-        'Exceptional': 0,
-        'Good': 0,
-        'Average': 0,
+        'Outstanding': 0,
+        'Proficient': 0,
+        'Competent': 0,
+        'Developing': 0,
         'Needs Improvement': 0
       };
 
@@ -196,6 +198,9 @@ export const StudentAnalyticsController = {
           subjectName: subName,
           percentage: Math.round(r.percentage),
           category,
+          grade: category,
+          emoji: GRADE_EMOJIS[category] || '📊',
+          displayGrade: `${GRADE_EMOJIS[category] || '📊'} ${category}`,
           color,
           date: r.attemptDate.toISOString(),
           timeTakenSeconds: examActiveTime
@@ -238,10 +243,11 @@ export const StudentAnalyticsController = {
       }));
 
       const categoryDistribution = [
-        { name: 'Exceptional', count: categoryCounts['Exceptional'] || 0, color: '#10b981' },
-        { name: 'Good', count: categoryCounts['Good'] || 0, color: '#3b82f6' },
-        { name: 'Average', count: categoryCounts['Average'] || 0, color: '#f59e0b' },
-        { name: 'Needs Improvement', count: categoryCounts['Needs Improvement'] || 0, color: '#ef4444' }
+        { name: 'Outstanding', count: categoryCounts['Outstanding'] || 0, color: '#10b981', emoji: '🌟' },
+        { name: 'Proficient', count: categoryCounts['Proficient'] || 0, color: '#3b82f6', emoji: '🎯' },
+        { name: 'Competent', count: categoryCounts['Competent'] || 0, color: '#06b6d4', emoji: '✅' },
+        { name: 'Developing', count: categoryCounts['Developing'] || 0, color: '#f59e0b', emoji: '📈' },
+        { name: 'Needs Improvement', count: categoryCounts['Needs Improvement'] || 0, color: '#ef4444', emoji: '⚠️' }
       ];
 
       // Sort recent activity descending
@@ -260,6 +266,9 @@ export const StudentAnalyticsController = {
           averageScore,
           highestScore,
           overallPerformanceCategory: overallCategory,
+          grade: overallCategory,
+          emoji: GRADE_EMOJIS[overallCategory] || '📊',
+          displayGrade: `${GRADE_EMOJIS[overallCategory] || '📊'} ${overallCategory}`,
           categoryColor,
           averageTimePerQuestion: overallAvgTimePerQuestion,
           performanceImprovement
@@ -420,6 +429,9 @@ export const StudentAnalyticsController = {
           percentage: evalRes.percentage,
           status: evalRes.status,
           performanceCategory: classificationCategory,
+          grade: classificationCategory,
+          emoji: GRADE_EMOJIS[classificationCategory] || '📊',
+          displayGrade: `${GRADE_EMOJIS[classificationCategory] || '📊'} ${classificationCategory}`,
           categoryColor: classificationColor,
           categoryDescription: classificationDesc,
           rank: result.rank || 1,

@@ -4,6 +4,7 @@ import { emailService } from '../services/emailService';
 import { AuthRequest } from '../middleware/auth';
 
 import { cleanQuestionText, pseudoRandomShuffle, getAssignedExamQuestions, evaluateExamAnswers } from '../utils/examUtils';
+import { normalizeCategory, GRADE_EMOJIS } from '../utils/performanceClassification';
 export { cleanQuestionText, pseudoRandomShuffle, getAssignedExamQuestions };
 
 async function saveQuestionTimingsSafe(studentExamId: string, questionTimings: any) {
@@ -771,7 +772,10 @@ export const StudentController = {
           totalPoints: totalPoints,
           percentage: finalPercentage,
           status: finalStatus,
-          performanceCategory: finalCategory,
+          performanceCategory: normalizeCategory(finalCategory),
+          grade: normalizeCategory(finalCategory),
+          emoji: GRADE_EMOJIS[normalizeCategory(finalCategory)] || '📊',
+          displayGrade: `${GRADE_EMOJIS[normalizeCategory(finalCategory)] || '📊'} ${normalizeCategory(finalCategory)}`,
           timeTaken: timeTakenSeconds,
           correctCount: hasAnswers ? evalRes.correctCount : Math.round((finalPercentage / 100) * (r.exam?.questionCount || 10)),
           wrongCount: hasAnswers ? evalRes.wrongCount : 0,
@@ -923,7 +927,10 @@ export const StudentController = {
         totalPoints: totalPoints,
         percentage: finalPercentage,
         status: finalStatus,
-        performanceCategory: finalCategory,
+        performanceCategory: normalizeCategory(finalCategory),
+        grade: normalizeCategory(finalCategory),
+        emoji: GRADE_EMOJIS[normalizeCategory(finalCategory)] || '📊',
+        displayGrade: `${GRADE_EMOJIS[normalizeCategory(finalCategory)] || '📊'} ${normalizeCategory(finalCategory)}`,
         answers: ansMap,
         detailedQuestions: detailedWithTiming,
         timeTaken: finalActiveSeconds,

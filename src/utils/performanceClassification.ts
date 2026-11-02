@@ -1,40 +1,67 @@
 import prisma from '../config/db';
 
+export type PerformanceTier = 'Outstanding' | 'Proficient' | 'Competent' | 'Developing' | 'Needs Improvement';
+
 export interface PerformanceCategoryDetail {
-  category: 'Exceptional' | 'Good' | 'Average' | 'Needs Improvement';
+  category: PerformanceTier | string;
   minScore: number;
   maxScore: number;
   color: string;
   description?: string | null;
+  emoji?: string;
 }
+
+export const GRADE_EMOJIS: Record<string, string> = {
+  'Outstanding': '🌟',
+  'Proficient': '🎯',
+  'Competent': '✅',
+  'Developing': '📈',
+  'Needs Improvement': '⚠️',
+  // Backwards compatibility mappings
+  'Exceptional': '🌟',
+  'Good': '🎯',
+  'Average': '✅'
+};
 
 export const DEFAULT_THRESHOLDS: PerformanceCategoryDetail[] = [
   {
-    category: 'Exceptional',
+    category: 'Outstanding',
     minScore: 90.0,
     maxScore: 100.0,
     color: '#10b981',
-    description: 'Outstanding mastery of the subject matter with minimal errors.'
+    emoji: '🌟',
+    description: 'Outstanding mastery of the subject matter with exemplary accuracy and problem-solving speed.'
   },
   {
-    category: 'Good',
+    category: 'Proficient',
     minScore: 75.0,
     maxScore: 89.99,
     color: '#3b82f6',
-    description: 'Strong competence and understanding with consistent accuracy.'
+    emoji: '🎯',
+    description: 'Strong competence and understanding with consistent accuracy across sections.'
   },
   {
-    category: 'Average',
-    minScore: 50.0,
+    category: 'Competent',
+    minScore: 60.0,
     maxScore: 74.99,
+    color: '#06b6d4',
+    emoji: '✅',
+    description: 'Sound grasp of foundational concepts, demonstrating practical competence.'
+  },
+  {
+    category: 'Developing',
+    minScore: 40.0,
+    maxScore: 59.99,
     color: '#f59e0b',
-    description: 'Adequate grasp of foundational concepts, with scope for improvement.'
+    emoji: '📈',
+    description: 'Developing foundational skills; additional practice recommended.'
   },
   {
     category: 'Needs Improvement',
     minScore: 0.0,
-    maxScore: 49.99,
+    maxScore: 39.99,
     color: '#ef4444',
+    emoji: '⚠️',
     description: 'Requires targeted academic remediation and practice.'
   }
 ];
@@ -54,13 +81,14 @@ export async function getActiveThresholds(): Promise<PerformanceCategoryDetail[]
       orderBy: { minScore: 'desc' }
     });
 
-    if (dbThresholds.length === 4) {
+    if (dbThresholds.length === 5) {
       cachedThresholds = dbThresholds.map(t => ({
-        category: t.category as any,
+        category: t.category,
         minScore: t.minScore,
         maxScore: t.maxScore,
         color: t.color || '#64748b',
-        description: t.description
+        description: t.description,
+        emoji: GRADE_EMOJIS[t.category] || '📊'
       }));
       lastCacheTime = now;
       return cachedThresholds;
@@ -77,8 +105,25 @@ export function invalidateThresholdCache(): void {
   lastCacheTime = 0;
 }
 
+/**
+ * Normalizes legacy category names into the canonical 5 tiers.
+ */
+export function normalizeCategory(cat: string | null | undefined): PerformanceTier {
+  if (!cat) return 'Needs Improvement';
+  const c = cat.trim();
+  if (c === 'Exceptional' || c === 'Outstanding') return 'Outstanding';
+  if (c === 'Good' || c === 'Proficient') return 'Proficient';
+  if (c === 'Competent') return 'Competent';
+  if (c === 'Average' || c === 'Developing') return 'Developing';
+  if (c === 'Needs Improvement') return 'Needs Improvement';
+  return 'Needs Improvement';
+}
+
 export function classifyScore(percentage: number, thresholds: PerformanceCategoryDetail[] = DEFAULT_THRESHOLDS): {
-  category: 'Exceptional' | 'Good' | 'Average' | 'Needs Improvement';
+  category: PerformanceTier;
+  grade: string;
+  emoji: string;
+  displayGrade: string;
   color: string;
   description: string;
 } {
@@ -87,29 +132,43 @@ export function classifyScore(percentage: number, thresholds: PerformanceCategor
   for (const t of thresholds) {
     // Epsilon tolerance for edge boundaries (e.g. 89.99 vs 90.0)
     if (normalizedPct >= t.minScore - 0.001 && normalizedPct <= t.maxScore + 0.001) {
+      const canonical = normalizeCategory(t.category);
+      const emoji = GRADE_EMOJIS[canonical] || '📊';
       return {
-        category: t.category,
+        category: canonical,
+        grade: canonical,
+        emoji,
+        displayGrade: `${emoji} ${canonical}`,
         color: t.color,
         description: t.description || ''
       };
     }
   }
 
-  // Fallback boundaries
-  if (normalizedPct >= 90) return { category: 'Exceptional', color: '#10b981', description: 'Outstanding mastery' };
-  if (normalizedPct >= 75) return { category: 'Good', color: '#3b82f6', description: 'Strong competence' };
-  if (normalizedPct >= 50) return { category: 'Average', color: '#f59e0b', description: 'Adequate grasp' };
-  return { category: 'Needs Improvement', color: '#ef4444', description: 'Requires targeted remediation' };
+  // Fallback boundaries if thresholds don't fully cover
+  if (normalizedPct >= 90) {
+    return { category: 'Outstanding', grade: 'Outstanding', emoji: '🌟', displayGrade: '🌟 Outstanding', color: '#10b981', description: 'Outstanding mastery' };
+  }
+  if (normalizedPct >= 75) {
+    return { category: 'Proficient', grade: 'Proficient', emoji: '🎯', displayGrade: '🎯 Proficient', color: '#3b82f6', description: 'Strong competence' };
+  }
+  if (normalizedPct >= 60) {
+    return { category: 'Competent', grade: 'Competent', emoji: '✅', displayGrade: '✅ Competent', color: '#06b6d4', description: 'Sound grasp' };
+  }
+  if (normalizedPct >= 40) {
+    return { category: 'Developing', grade: 'Developing', emoji: '📈', displayGrade: '📈 Developing', color: '#f59e0b', description: 'Developing skills' };
+  }
+  return { category: 'Needs Improvement', grade: 'Needs Improvement', emoji: '⚠️', displayGrade: '⚠️ Needs Improvement', color: '#ef4444', description: 'Requires targeted remediation' };
 }
 
 export function validateThresholdBoundaries(
   thresholds: Array<{ category: string; minScore: number; maxScore: number }>
 ): { valid: boolean; error?: string } {
-  if (!thresholds || thresholds.length !== 4) {
-    return { valid: false, error: 'Exactly four performance categories are required: Exceptional, Good, Average, Needs Improvement.' };
+  if (!thresholds || thresholds.length !== 5) {
+    return { valid: false, error: 'Exactly five performance categories are required: Outstanding, Proficient, Competent, Developing, Needs Improvement.' };
   }
 
-  const requiredCategories = ['Exceptional', 'Good', 'Average', 'Needs Improvement'];
+  const requiredCategories = ['Outstanding', 'Proficient', 'Competent', 'Developing', 'Needs Improvement'];
   const presentCategories = thresholds.map(t => t.category);
   for (const req of requiredCategories) {
     if (!presentCategories.includes(req)) {
@@ -133,25 +192,25 @@ export function validateThresholdBoundaries(
   // Sort descending by minScore
   const sorted = [...thresholds].sort((a, b) => b.minScore - a.minScore);
 
-  // Expect: Exceptional > Good > Average > Needs Improvement
-  if (sorted[0].category !== 'Exceptional' ||
-      sorted[1].category !== 'Good' ||
-      sorted[2].category !== 'Average' ||
-      sorted[3].category !== 'Needs Improvement') {
+  if (sorted[0].category !== 'Outstanding' ||
+      sorted[1].category !== 'Proficient' ||
+      sorted[2].category !== 'Competent' ||
+      sorted[3].category !== 'Developing' ||
+      sorted[4].category !== 'Needs Improvement') {
     return {
       valid: false,
-      error: 'Category ordering must strictly be Exceptional (highest) > Good > Average > Needs Improvement (lowest).'
+      error: 'Category ordering must strictly be Outstanding (highest) > Proficient > Competent > Developing > Needs Improvement (lowest).'
     };
   }
 
   // Needs Improvement must start at 0
-  if (Math.abs(sorted[3].minScore) > 0.01) {
+  if (Math.abs(sorted[4].minScore) > 0.01) {
     return { valid: false, error: 'Needs Improvement category must start at 0%.' };
   }
 
-  // Exceptional must end at 100
+  // Outstanding must end at 100
   if (Math.abs(sorted[0].maxScore - 100) > 0.01) {
-    return { valid: false, error: 'Exceptional category must end at 100%.' };
+    return { valid: false, error: 'Outstanding category must end at 100%.' };
   }
 
   // Check contiguous adjacency (gap or overlap <= 0.05 allowed for decimal rounding e.g. 74.99 and 75.0)
@@ -175,4 +234,3 @@ export function validateThresholdBoundaries(
 
   return { valid: true };
 }
-

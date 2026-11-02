@@ -29,6 +29,7 @@ export const SuperAdminAssessmentController = {
         startDate,
         endDate,
         targetYears,
+        gradingThresholds,
         collegeIds, // array of selected college UUIDs
         questionIds, // optional array of selected question UUIDs from Question Bank
         publishedStatus // 'draft' | 'scheduled' | 'published'
@@ -126,7 +127,8 @@ export const SuperAdminAssessmentController = {
           endDate: finalEndDate,
           status: initialStatus,
           publishedStatus: publishedStatus || 'draft',
-          targetYears: targetYears || 'all'
+          targetYears: targetYears || 'all',
+          gradingThresholds: gradingThresholds ? (typeof gradingThresholds === 'string' ? gradingThresholds : JSON.stringify(gradingThresholds)) : null
         }
       });
 
@@ -134,10 +136,16 @@ export const SuperAdminAssessmentController = {
       let selectedQIds: string[] = [];
       if (questionIds && Array.isArray(questionIds) && questionIds.length > 0) {
         selectedQIds = questionIds;
-      } else if (subjectId) {
+      } else if (resolvedSubjectId) {
         const pool = await prisma.question.findMany({
-          where: { subjectId },
-          take: exam.questionCount
+          where: { subjectId: resolvedSubjectId },
+          take: exam.questionCount || 20
+        });
+        selectedQIds = pool.map(q => q.id);
+      } else {
+        // Fallback: pick any questions from pool
+        const pool = await prisma.question.findMany({
+          take: exam.questionCount || 20
         });
         selectedQIds = pool.map(q => q.id);
       }
@@ -146,6 +154,12 @@ export const SuperAdminAssessmentController = {
         await prisma.examQuestion.createMany({
           data: selectedQIds.map(qId => ({ examId: exam.id, questionId: qId })),
           skipDuplicates: true
+        });
+
+        // Ensure questionCount matches actual linked questions count
+        await prisma.exam.update({
+          where: { id: exam.id },
+          data: { questionCount: selectedQIds.length }
         });
       }
 
