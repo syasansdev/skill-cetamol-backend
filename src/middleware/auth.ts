@@ -21,7 +21,9 @@ export const authenticateToken = (req: AuthRequest, res: Response, next: NextFun
 
   jwt.verify(token, process.env.JWT_SECRET || 'your_super_secret_jwt_key', async (err: any, decodedUser: any) => {
     if (err) {
-      console.error("[Auth Middleware] JWT Verification Error:", err.message);
+      if (err.name !== 'TokenExpiredError') {
+        console.warn("[Auth Middleware] JWT Verification Warning:", err.message);
+      }
       return res.status(401).json({ message: 'Invalid or expired token' });
     }
 
