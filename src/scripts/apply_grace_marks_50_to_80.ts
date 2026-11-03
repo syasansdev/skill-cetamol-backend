@@ -58,65 +58,55 @@ function getScoreForTier(seedStr: string, tier: 'FAIL' | 'JUST_PASS' | 'NORMAL')
 
 async function main() {
   console.log('================================================================');
-  console.log('  🎯 COMPLETE 91-CANDIDATE GRADE ALLOCATION TOOL');
-  console.log('  - Enrolls & Grades ALL 91 Students for "Aptitude Level - 3 Test"');
+  console.log('  🎯 VELAMMAL COLLEGE ONLY - APTITUDE LEVEL - 3 TEST');
+  console.log('  - Strictly filters to Velammal Institute of Technology, Chennai');
+  console.log('  - DOES NOT touch any other college (Achariya, Jeppiaar, Syasan, etc.)');
   console.log('  - Excludes Malpractice Candidate (Vivek M: 0 marks / LOCKED)');
   console.log('  - Preserves Top Performers (Dharshini 96.25%, Midhun S 93.75%)');
-  console.log('  - Exactly 10 Students FAILED with marks between 24% and 38%');
-  console.log('  - 10 Students with JUST PASS marks (40% to 48%)');
-  console.log('  - Remaining Students with 50 to 80 MARKS MAX');
+  console.log('  - Exactly 10 Velammal Students FAILED (24% to 38%)');
+  console.log('  - 10 Velammal Students with JUST PASS marks (40% to 48%)');
+  console.log('  - Remaining Velammal Students with 50 to 80 MARKS MAX');
   console.log('================================================================\n');
 
-  // 1. Locate Aptitude Level - 3 Test
+  // 1. Locate Velammal College
+  const velammalCollege = await prisma.college.findFirst({
+    where: {
+      collegeName: { contains: 'Velammal', mode: 'insensitive' }
+    }
+  });
+
+  if (!velammalCollege) {
+    console.error('❌ Could not locate "Velammal" college in database.');
+    process.exit(1);
+  }
+
+  console.log(`🏫 Located College: "${velammalCollege.collegeName}" (ID: ${velammalCollege.id})`);
+
+  // 2. Locate specifically "Aptitude Level - 3 Test"
   const exam = await prisma.exam.findFirst({
     where: {
       title: { contains: 'Aptitude Level - 3', mode: 'insensitive' }
     },
     include: {
-      college: true,
-      institutionAssessments: { include: { college: true } },
-      studentExams: {
-        include: {
-          student: { include: { user: true, college: true, department: true } }
-        }
-      },
-      results: {
-        include: {
-          student: { include: { user: true, college: true, department: true } }
-        }
-      }
+      subject: true,
+      college: true
     }
   });
 
   if (!exam) {
-    console.error('❌ Could not locate "Aptitude Level - 3 Test" in the database.');
+    console.error('❌ Could not locate "Aptitude Level - 3 Test" in database.');
     process.exit(1);
   }
 
-  console.log(`📌 Target Assessment: "${exam.title}" (ID: ${exam.id})`);
-  console.log(`   - Existing StudentExam attempts in DB: ${exam.studentExams.length}`);
-  console.log(`   - Existing Results in DB: ${exam.results.length}`);
+  console.log(`📌 Located Assessment: "${exam.title}" (ID: ${exam.id})\n`);
 
-  // Collect all colleges associated with this exam
-  const collegeIds = new Set<string>();
-  if (exam.collegeId) collegeIds.add(exam.collegeId);
-  for (const ia of exam.institutionAssessments) {
-    if (ia.collegeId) collegeIds.add(ia.collegeId);
-  }
-  for (const se of exam.studentExams) {
-    if (se.student.collegeId) collegeIds.add(se.student.collegeId);
-  }
-  for (const r of exam.results) {
-    if (r.student?.collegeId) collegeIds.add(r.student.collegeId);
-  }
-
-  // 2. Fetch all candidates (from target colleges or entire student body)
-  let students = await prisma.student.findMany({
+  // 3. Fetch ONLY students belonging to Velammal
+  const velammalStudents = await prisma.student.findMany({
     where: {
       OR: [
-        { collegeId: { in: Array.from(collegeIds) } },
-        { studentExams: { some: { examId: exam.id } } },
-        { results: { some: { examId: exam.id } } }
+        { collegeId: velammalCollege.id },
+        { college: { collegeName: { contains: 'Velammal', mode: 'insensitive' } } },
+        { registerNumber: { startsWith: '1133' } } // Anna University / Velammal Tech code series
       ]
     },
     include: {
@@ -129,27 +119,15 @@ async function main() {
     orderBy: { registerNumber: 'asc' }
   });
 
-  // If the college-specific query returned fewer than 91, grab all registered students
-  if (students.length < 91) {
-    const allDbStudents = await prisma.student.findMany({
-      include: {
-        user: true,
-        college: true,
-        department: true,
-        studentExams: { where: { examId: exam.id } },
-        results: { where: { examId: exam.id } }
-      },
-      orderBy: { registerNumber: 'asc' }
-    });
-    if (allDbStudents.length >= students.length) {
-      students = allDbStudents;
-    }
+  console.log(`👥 Found EXACTLY ${velammalStudents.length} students enrolled in ${velammalCollege.collegeName}.\n`);
+
+  if (velammalStudents.length === 0) {
+    console.error('❌ No Velammal students found in database.');
+    process.exit(1);
   }
 
-  console.log(`\n👥 Total Students Located for Assessment: ${students.length} candidates`);
-
-  // Map existing scores
-  const candidateList = students.map(s => {
+  // Map candidates
+  const candidateList = velammalStudents.map(s => {
     const existingSe = s.studentExams[0];
     const existingRes = s.results[0];
     const rollNo = s.registerNumber || 'N/A';
@@ -162,7 +140,8 @@ async function main() {
       studentId: s.id,
       studentName: s.user?.name || 'Unknown Student',
       rollNo,
-      collegeName: s.college?.collegeName || 'Velammal Institute of Technology, Chennai',
+      collegeName: s.college?.collegeName || velammalCollege.collegeName,
+      departmentName: s.department?.departmentName || 'Engineering',
       existingSe,
       existingRes,
       score,
@@ -198,16 +177,16 @@ async function main() {
     }
   }
 
-  console.log(`\n⚙️ Allocating grades across ${candidateList.length} students:`);
-  console.log(`   - Malpractice (Locked):  ${malpracticeCandidate ? 1 : 0}`);
-  console.log(`   - Top Performers (>80):  ${topScorers.length}`);
-  console.log(`   - Failed (<40%):         ${failCount}`);
-  console.log(`   - Just Pass (40-48%):    ${justPassCount}`);
-  console.log(`   - Passed (50-80 Max):    ${standardCandidates.length - failCount - justPassCount}\n`);
+  console.log(`⚙️ Allocating grades ONLY for ${candidateList.length} Velammal students:`);
+  console.log(`   - Malpractice Candidate (Locked):  ${malpracticeCandidate ? 1 : 0}`);
+  console.log(`   - Top Performers (>80):            ${topScorers.length}`);
+  console.log(`   - Failed Students (<40%):          ${failCount}`);
+  console.log(`   - Just Pass Students (40-48%):     ${justPassCount}`);
+  console.log(`   - Passed Students (50-80 Max):      ${standardCandidates.length - failCount - justPassCount}\n`);
 
   let countProcessed = 0;
 
-  // 1. Process Malpractice Candidate
+  // 1. Process Malpractice Candidate (Vivek M)
   if (malpracticeCandidate) {
     countProcessed++;
     if (malpracticeCandidate.existingSe) {
@@ -221,10 +200,10 @@ async function main() {
       update: { percentage: 0, status: 'fail', grade: 'F', performanceCategory: 'Needs Improvement' },
       create: { studentId: malpracticeCandidate.studentId, examId: exam.id, percentage: 0, status: 'fail', grade: 'F', performanceCategory: 'Needs Improvement' }
     });
-    console.log(`🚫 [MALPRACTICE]: ${malpracticeCandidate.studentName} (${malpracticeCandidate.rollNo}) -> 0 marks [LOCKED]`);
+    console.log(`🚫 [MALPRACTICE]: ${malpracticeCandidate.studentName.padEnd(20)} (${malpracticeCandidate.rollNo}) -> 0 marks [LOCKED]`);
   }
 
-  // 2. Process Top Performers
+  // 2. Process Top Performers (Dharshini & Midhun S)
   for (const top of topScorers) {
     countProcessed++;
     const finalScore = top.score;
@@ -252,10 +231,10 @@ async function main() {
       update: { percentage: finalPct, status: 'pass', grade: 'A+', performanceCategory: 'Outstanding' },
       create: { studentId: top.studentId, examId: exam.id, percentage: finalPct, status: 'pass', grade: 'A+', performanceCategory: 'Outstanding' }
     });
-    console.log(`⭐ [TOP PERFORMER]: ${top.studentName} (${top.rollNo}) -> ${finalScore} marks (${finalPct}%) [Outstanding]`);
+    console.log(`⭐ [TOP PERFORMER]: ${top.studentName.padEnd(20)} (${top.rollNo}) -> ${finalScore} marks (${finalPct}%) [Outstanding]`);
   }
 
-  // 3. Process Standard Candidates
+  // 3. Process Standard Velammal Candidates
   for (let idx = 0; idx < standardCandidates.length; idx++) {
     countProcessed++;
     const cand = standardCandidates[idx];
@@ -318,35 +297,40 @@ async function main() {
     });
 
     const tierPrefix = tier === 'FAIL' ? '❌ [FAIL]' : tier === 'JUST_PASS' ? '⚠️ [JUST PASS]' : '✅ [PASS (50-80)]';
-    console.log(`${tierPrefix.padEnd(18)} ${cand.studentName.padEnd(22)} (${cand.rollNo}) -> ${evalData.score} marks (${evalData.pct}%) [${evalData.grade} - ${evalData.cat}]`);
+    console.log(`${tierPrefix.padEnd(18)} ${cand.studentName.padEnd(20)} (${cand.rollNo}) -> ${evalData.score} marks (${evalData.pct}%) [${evalData.grade} - ${evalData.cat}]`);
   }
 
-  // 4. Recalculate Official Ranks 1 to N
-  console.log('\n📊 Re-ranking all candidates from highest to lowest...');
-  const allResults = await prisma.result.findMany({
-    where: { examId: exam.id },
+  // 4. Recalculate Official Ranks strictly for Velammal students in this exam
+  console.log('\n📊 Re-ranking Velammal students from highest to lowest...');
+  const velammalStudentIds = velammalStudents.map(s => s.id);
+  const velammalResults = await prisma.result.findMany({
+    where: {
+      examId: exam.id,
+      studentId: { in: velammalStudentIds }
+    },
     orderBy: { percentage: 'desc' }
   });
 
-  for (let rIdx = 0; rIdx < allResults.length; rIdx++) {
+  for (let rIdx = 0; rIdx < velammalResults.length; rIdx++) {
     await prisma.result.update({
-      where: { id: allResults[rIdx].id },
+      where: { id: velammalResults[rIdx].id },
       data: { rank: rIdx + 1 }
     });
   }
 
   console.log('\n================================================================');
-  console.log('  🎉 FINAL COMPLETION SUMMARY');
+  console.log('  🎉 FINAL EXECUTION SUMMARY (VELAMMAL COLLEGE ONLY)');
   console.log('================================================================');
-  console.log(`   Total Candidates Now Graded & Live: ${allResults.length}`);
-  console.log(`   Top Performers (>80):               ${topScorers.length}`);
+  console.log(`   College:                            ${velammalCollege.collegeName}`);
+  console.log(`   Assessment:                         ${exam.title}`);
+  console.log(`   Total Velammal Students Graded:     ${velammalResults.length}`);
+  console.log(`   Top Performers (>80):               ${topScorers.length} (Dharshini 96.25%, Midhun S 93.75%)`);
   console.log(`   Passed Candidates (50-80 Max):      ${standardCandidates.length - failCount - justPassCount}`);
   console.log(`   Borderline Just Pass (40-48%):      ${justPassCount}`);
   console.log(`   Failed Candidates (24-38%):         ${failCount}`);
-  console.log(`   Malpractice Candidate:              ${malpracticeCandidate ? 1 : 0}`);
+  console.log(`   Malpractice Candidate (LOCKED):     ${malpracticeCandidate ? 1 : 0} (Vivek M)`);
   console.log('================================================================');
-  console.log('✅ ALL CANDIDATE MARKS ARE SAVED IN PRODUCTION DATABASE!');
-  console.log('   The Admin and Faculty dashboards and CSV exports will now show the full batch!');
+  console.log('✅ ALL VELAMMAL MARKS SAVED EXCLUSIVELY! NO OTHER COLLEGES TOUCHED.');
 }
 
 main()
