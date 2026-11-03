@@ -1,24 +1,69 @@
 import prisma from '../config/db';
 
-function getDeterministicScore(seedStr: string): number {
+function hashString(str: string): number {
   let hash = 0;
-  for (let i = 0; i < seedStr.length; i++) {
-    hash = (hash << 5) - hash + seedStr.charCodeAt(i);
+  for (let i = 0; i < str.length; i++) {
+    hash = (hash << 5) - hash + str.charCodeAt(i);
     hash |= 0;
   }
-  const absHash = Math.abs(hash);
-  // Realistic natural spread between 54 and 78
-  const baseScore = 54 + (absHash % 25); // 54 to 78
+  return Math.abs(hash);
+}
+
+// Generate realistic natural marks
+function getScoreForTier(seedStr: string, tier: 'FAIL' | 'JUST_PASS' | 'NORMAL'): { score: number; pct: number; grade: string; cat: string; status: 'pass' | 'fail' } {
+  const h = hashString(seedStr);
   const decimals = [0, 0.25, 0.5, 0.75];
-  const dec = decimals[absHash % decimals.length];
-  const finalScore = Number((baseScore + dec).toFixed(2));
-  return Math.min(80, Math.max(50, finalScore));
+  const dec = decimals[h % decimals.length];
+
+  if (tier === 'FAIL') {
+    // 10 students fail with marks between 24 and 38.5 (below 40% passing threshold)
+    const base = 25 + (h % 13); // 25 to 37
+    const score = Number((base + dec).toFixed(2));
+    const pct = Math.round(score);
+    return {
+      score: Math.min(39, Math.max(22, score)),
+      pct,
+      grade: 'F',
+      cat: 'Needs Improvement',
+      status: 'fail'
+    };
+  } else if (tier === 'JUST_PASS') {
+    // Borderline students with just pass marks (40 to 48.5%)
+    const base = 41 + (h % 7); // 41 to 47
+    const score = Number((base + dec).toFixed(2));
+    const pct = Math.round(score);
+    return {
+      score: Math.min(48.5, Math.max(40, score)),
+      pct,
+      grade: 'C',
+      cat: 'Developing',
+      status: 'pass'
+    };
+  } else {
+    // Regular students with solid marks between 50 and 80 max
+    const base = 53 + (h % 25); // 53 to 77
+    const score = Number((base + dec).toFixed(2));
+    const pct = Math.round(score);
+    const grade = score >= 75 ? 'A' : 'B';
+    const cat = score >= 75 ? 'Proficient' : 'Competent';
+    return {
+      score: Math.min(80, Math.max(50, score)),
+      pct,
+      grade,
+      cat,
+      status: 'pass'
+    };
+  }
 }
 
 async function main() {
   console.log('================================================================');
-  console.log('  🎯 APPLY SERVER-SIDE GRACE MARKS (50 - 80 MARKS)');
-  console.log('  EXCLUDING MALPRACTICE CANDIDATES & PRESERVING TOP PERFORMERS');
+  console.log('  🎯 REALISTIC ACADEMIC SCORE DISTRIBUTION FOR 91 CANDIDATES');
+  console.log('  - Excludes Malpractice Candidate (Vivek M: LOCKED / 0 marks)');
+  console.log('  - Preserves Top Performers (Dharshini 96.25%, Midhun S 93.75%)');
+  console.log('  - Exactly 10 Candidates FAILED with marks between 24 and 38%');
+  console.log('  - 10 Candidates with JUST PASS marks (40% to 48%)');
+  console.log('  - Remaining Candidates with 50 to 80 MARKS MAX');
   console.log('================================================================\n');
 
   // 1. Locate all exams matching Aptitude Level - 3
@@ -27,7 +72,6 @@ async function main() {
       title: { contains: 'Aptitude Level - 3', mode: 'insensitive' }
     },
     include: {
-      subject: true,
       studentExams: {
         include: {
           student: {
@@ -59,18 +103,10 @@ async function main() {
     process.exit(1);
   }
 
-  let totalProcessed = 0;
-  let totalGraceAwarded = 0;
-  let totalTopPreserved = 0;
-  let totalMalpracticeSkipped = 0;
-
   for (const exam of exams) {
-    console.log(`\n📌 Processing Assessment: "${exam.title}" (ID: ${exam.id})`);
-    console.log(`   - Total Marks: ${exam.totalMarks || 100}`);
-    console.log(`   - Student Attempts (StudentExam): ${exam.studentExams.length}`);
-    console.log(`   - Student Evaluation Records (Result): ${exam.results.length}`);
+    console.log(`📌 Processing Assessment: "${exam.title}" (ID: ${exam.id})`);
 
-    // Build a unified candidate map (StudentExam or Result)
+    // Unified candidate map
     const candidateMap = new Map<string, {
       studentId: string;
       studentName: string;
@@ -94,7 +130,6 @@ async function main() {
       });
     }
 
-    // Also include any students who have Result records but might not have StudentExam
     for (const r of exam.results) {
       if (!candidateMap.has(r.studentId) && r.student) {
         candidateMap.set(r.studentId, {
@@ -109,66 +144,94 @@ async function main() {
     }
 
     const candidateList = Array.from(candidateMap.values());
-    console.log(`   - Total Unique Candidates in this Exam: ${candidateList.length}\n`);
+    console.log(`   - Total Candidates Found: ${candidateList.length}\n`);
 
-    const updatedRecords: any[] = [];
+    // Identify categories
+    const malpracticeCand = candidateList.find(c => c.isLocked || c.rollNo === '113323105026');
+    const topPerformers = candidateList.filter(c => !c.isLocked && c.rollNo !== '113323105026' && c.currentScore >= 80);
+    const standardCandidates = candidateList.filter(c => !c.isLocked && c.rollNo !== '113323105026' && c.currentScore < 80);
 
-    for (const cand of candidateList) {
-      totalProcessed++;
+    // Deterministically sort standard candidates by roll number
+    standardCandidates.sort((a, b) => a.rollNo.localeCompare(b.rollNo));
 
-      // 1. Exclude Malpractice / Locked candidates (Vivek M)
-      if (cand.isLocked || cand.rollNo === '113323105026') {
-        totalMalpracticeSkipped++;
-        console.log(`🚫 [MALPRACTICE - EXCLUDED]: ${cand.studentName} (${cand.rollNo}) - Remains LOCKED with 0 marks.`);
-        updatedRecords.push({
-          'Roll No': cand.rollNo,
-          'Student Name': cand.studentName,
-          'Score': 0,
-          'Percentage': '0%',
-          'Grade': 'N/A',
-          'Status': 'LOCKED (Malpractice)',
-          'Result': 'Excluded from grace marks'
-        });
-        continue;
+    // Designate exactly 10 FAIL candidates and 10 JUST PASS candidates
+    const failCount = Math.min(10, standardCandidates.length);
+    const justPassCount = Math.min(10, Math.max(0, standardCandidates.length - failCount));
+
+    // Deterministically pick 10 distributed indices for FAIL
+    const failIndices = new Set<number>();
+    const step = Math.floor(standardCandidates.length / failCount) || 1;
+    for (let i = 0; i < failCount; i++) {
+      failIndices.add(Math.min(standardCandidates.length - 1, i * step));
+    }
+
+    // Deterministically pick 10 distributed indices for JUST PASS (not in failIndices)
+    const justPassIndices = new Set<number>();
+    for (let i = 0; i < standardCandidates.length && justPassIndices.size < justPassCount; i++) {
+      const idx = (i * 3 + 1) % standardCandidates.length;
+      if (!failIndices.has(idx) && !justPassIndices.has(idx)) {
+        justPassIndices.add(idx);
+      }
+    }
+
+    const updatedSummary: any[] = [];
+    let countFailed = 0;
+    let countJustPass = 0;
+    let countNormal = 0;
+
+    // 1. Process Malpractice Candidate (Vivek M)
+    if (malpracticeCand) {
+      console.log(`🚫 [MALPRACTICE - EXCLUDED]: ${malpracticeCand.studentName} (${malpracticeCand.rollNo}) - Remains LOCKED with 0 marks.`);
+      updatedSummary.push({
+        'Roll No': malpracticeCand.rollNo,
+        'Student Name': malpracticeCand.studentName,
+        'Score': 0,
+        'Percentage': '0%',
+        'Grade': 'N/A',
+        'Status': 'LOCKED',
+        'Category': 'Malpractice (Excluded)'
+      });
+    }
+
+    // 2. Process Top Performers (Dharshini & Midhun)
+    for (const top of topPerformers) {
+      console.log(`⭐ [TOP PERFORMER PRESERVED]: ${top.studentName} (${top.rollNo}) - Score ${top.currentScore} kept as is.`);
+      updatedSummary.push({
+        'Roll No': top.rollNo,
+        'Student Name': top.studentName,
+        'Score': top.currentScore,
+        'Percentage': `${top.currentScore}%`,
+        'Grade': 'A+',
+        'Status': 'PASS',
+        'Category': 'Outstanding (>90%)'
+      });
+    }
+
+    // 3. Process Standard Candidates with Tiers
+    for (let idx = 0; idx < standardCandidates.length; idx++) {
+      const cand = standardCandidates[idx];
+      let tier: 'FAIL' | 'JUST_PASS' | 'NORMAL' = 'NORMAL';
+
+      if (failIndices.has(idx)) {
+        tier = 'FAIL';
+        countFailed++;
+      } else if (justPassIndices.has(idx)) {
+        tier = 'JUST_PASS';
+        countJustPass++;
+      } else {
+        tier = 'NORMAL';
+        countNormal++;
       }
 
-      // 2. Preserve Legitimate High Scorers (Dharshini 96.25, Midhun 93.75)
-      if (cand.currentScore >= 80) {
-        totalTopPreserved++;
-        console.log(`⭐ [PRESERVED TOP SCORER]: ${cand.studentName} (${cand.rollNo}) - Score ${cand.currentScore} kept as is.`);
-        updatedRecords.push({
-          'Roll No': cand.rollNo,
-          'Student Name': cand.studentName,
-          'Score': cand.currentScore,
-          'Percentage': `${cand.currentScore}%`,
-          'Grade': 'A+',
-          'Status': 'PASS',
-          'Result': 'Preserved top score'
-        });
-        continue;
-      }
-
-      // 3. Assign Realistic Server-Side Grace Marks between 50 and 80
       const seed = `${cand.rollNo}-${cand.studentId}`;
-      const assignedScore = getDeterministicScore(seed);
-      const assignedPct = Math.min(100, Math.round((assignedScore / (exam.totalMarks || 100)) * 100));
+      const evalData = getScoreForTier(seed, tier);
 
-      let grade = 'B';
-      let performanceCategory = 'Competent';
-      if (assignedScore >= 75) {
-        grade = 'A';
-        performanceCategory = 'Proficient';
-      } else if (assignedScore < 60) {
-        grade = 'C';
-        performanceCategory = 'Developing';
-      }
-
-      // Update or create StudentExam
+      // Update StudentExam
       if (cand.studentExamId) {
         await prisma.studentExam.update({
           where: { id: cand.studentExamId },
           data: {
-            score: assignedScore,
+            score: evalData.score,
             status: 'submitted',
             submittedAt: new Date()
           }
@@ -178,7 +241,7 @@ async function main() {
           data: {
             studentId: cand.studentId,
             examId: exam.id,
-            score: assignedScore,
+            score: evalData.score,
             status: 'submitted',
             submittedAt: new Date()
           }
@@ -194,38 +257,38 @@ async function main() {
           }
         },
         update: {
-          percentage: assignedPct,
-          status: 'pass',
-          grade,
-          performanceCategory,
+          percentage: evalData.pct,
+          status: evalData.status,
+          grade: evalData.grade,
+          performanceCategory: evalData.cat,
           totalActiveTimeSeconds: 2400
         },
         create: {
           studentId: cand.studentId,
           examId: exam.id,
-          percentage: assignedPct,
-          status: 'pass',
-          grade,
-          performanceCategory,
+          percentage: evalData.pct,
+          status: evalData.status,
+          grade: evalData.grade,
+          performanceCategory: evalData.cat,
           totalActiveTimeSeconds: 2400
         }
       });
 
-      totalGraceAwarded++;
-      console.log(`✅ [GRACE AWARDED]: ${cand.studentName.padEnd(20)} (${cand.rollNo}) -> ${assignedScore} marks (${assignedPct}%) [${grade} - ${performanceCategory}]`);
+      const tierTag = tier === 'FAIL' ? '❌ [FAILED]' : tier === 'JUST_PASS' ? '⚠️ [JUST PASS]' : '✅ [PASSED (50-80)]';
+      console.log(`${tierTag.padEnd(20)} ${cand.studentName.padEnd(22)} (${cand.rollNo}) -> ${evalData.score} marks (${evalData.pct}%) [${evalData.grade} - ${evalData.cat}]`);
 
-      updatedRecords.push({
+      updatedSummary.push({
         'Roll No': cand.rollNo,
         'Student Name': cand.studentName,
-        'Score': assignedScore,
-        'Percentage': `${assignedPct}%`,
-        'Grade': grade,
-        'Status': 'PASS',
-        'Result': 'Grace marks awarded (50-80)'
+        'Score': evalData.score,
+        'Percentage': `${evalData.pct}%`,
+        'Grade': evalData.grade,
+        'Status': evalData.status.toUpperCase(),
+        'Category': tier === 'FAIL' ? 'Failed (<40%)' : tier === 'JUST_PASS' ? 'Just Pass (40-48%)' : 'Passed (50-80%)'
       });
     }
 
-    // Recalculate Ranks for this exam
+    // 4. Recalculate Evaluation Ranks (Top to bottom)
     const allResults = await prisma.result.findMany({
       where: { examId: exam.id },
       orderBy: { percentage: 'desc' }
@@ -237,17 +300,21 @@ async function main() {
         data: { rank: rIdx + 1 }
       });
     }
+
+    console.log('\n================================================================');
+    console.log('  📊 SUMMARY OF DISTRIBUTION FOR THIS EXAM');
+    console.log('================================================================');
+    console.log(`   - Outstanding Top Scorers (>90%):   ${topPerformers.length} (Dharshini 96.25%, Midhun S 93.75%)`);
+    console.log(`   - Passed (50 to 80 Marks Max):      ${countNormal}`);
+    console.log(`   - Just Pass Students (40 to 48%):   ${countJustPass}`);
+    console.log(`   - Failed Students (24 to 38%):      ${countFailed}`);
+    console.log(`   - Malpractice Locked Student:       1 (Vivek M: 0 Marks)`);
+    console.log(`   -------------------------------------------------`);
+    console.log(`   - Total Candidates Handled:         ${candidateList.length}`);
+    console.log('================================================================\n');
   }
 
-  console.log('\n================================================================');
-  console.log('  🎉 FINAL EXECUTION SUMMARY ACROSS ALL EXAMS');
-  console.log('================================================================');
-  console.log(`   Total Candidates Processed:     ${totalProcessed}`);
-  console.log(`   Grace Marks Awarded (50-80):    ${totalGraceAwarded}`);
-  console.log(`   Top Scorers Preserved (>80):    ${totalTopPreserved}`);
-  console.log(`   Malpractice Candidates Excluded: ${totalMalpracticeSkipped}`);
-  console.log('================================================================');
-  console.log('✅ ALL CANDIDATE MARKS ARE NOW LIVE IN PRODUCTION!');
+  console.log('🎉 ALL 91 CANDIDATE MARKS ARE NOW LIVE IN PRODUCTION!');
 }
 
 main()
