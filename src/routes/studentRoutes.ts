@@ -28,6 +28,12 @@ const upload = multer({ storage });
 
 // Apply auth middleware to all student endpoints
 router.use(authenticateToken);
+
+// Individual result details & report card viewable by student, faculty, and admin
+router.get('/results/:id', requireRole(['student', 'faculty', 'admin']), StudentController.getResultDetails);
+router.get('/reports/:id', requireRole(['student', 'faculty', 'admin']), StudentAnalyticsController.getIndividualReport);
+
+// All subsequent candidate examination operations require student role
 router.use(requireRole(['student']));
 
 router.get('/exams', StudentController.getExams);
@@ -36,11 +42,9 @@ router.post('/exams/:id/submit', StudentController.submitExam);
 router.post('/exams/:id/auto-save', StudentController.autoSaveExam);
 router.post('/exams/:id/proctor-event', StudentController.logProctorEvent);
 router.get('/results', StudentController.getResults);
-router.get('/results/:id', StudentController.getResultDetails);
 
-// Master Analytics & Individual Test Reports
+// Master Analytics
 router.get('/analytics/master-summary', StudentAnalyticsController.getMasterAnalytics);
-router.get('/reports/:id', StudentAnalyticsController.getIndividualReport);
 
 // Academic and Portions
 router.get('/subjects', StudentController.getSubjects);

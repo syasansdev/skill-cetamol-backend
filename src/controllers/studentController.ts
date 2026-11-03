@@ -774,7 +774,7 @@ export const StudentController = {
           examId: r.examId,
           examTitle: r.exam?.title || 'Examination',
           subjectName: r.exam?.subject ? r.exam.subject.subjectName : 'General Evaluation',
-          studentId: req.user!.id,
+          studentId: student.user?.id || student.id || req.user!.id,
           studentName: student.user?.name || student.registerNumber || 'Student',
           studentRollNo: student.registerNumber,
           score: finalScore,
@@ -803,39 +803,111 @@ export const StudentController = {
     }
   },
 
-  // 4. Get Individual Result Details
+  // 4. Get Individual Result Details (Accessible by Student, Faculty, and Admin)
   getResultDetails: async (req: AuthRequest, res: Response, next: NextFunction) => {
     try {
       const resultId = req.params.id;
+      const isAdminOrFaculty = req.user?.role === 'admin' || req.user?.role === 'faculty';
 
-      const student = await prisma.student.findUnique({
-        where: { userId: req.user!.id },
-        include: { user: true }
-      });
+      let student: any = null;
+      let result: any = null;
 
-      if (!student) {
-        return res.status(403).json({ message: 'Student profile not found' });
-      }
-
-      const result = await prisma.result.findFirst({
-        where: {
-          OR: [
-            { id: resultId },
-            { examId: resultId }
-          ],
-          studentId: student.id
-        },
-        include: {
-          exam: {
-            include: {
-              subject: true,
-              examQuestions: { include: { question: { include: { options: true } } } }
+      if (isAdminOrFaculty) {
+        // Faculty & Admin can inspect any candidate's assessment result
+        result = await prisma.result.findFirst({
+          where: {
+            OR: [
+              { id: resultId },
+              { examId: resultId }
+            ]
+          },
+          include: {
+            student: { include: { user: true, college: true, department: true } },
+            exam: {
+              include: {
+                subject: true,
+                college: true,
+                examQuestions: { include: { question: { include: { options: true } } } }
+              }
             }
           }
-        }
-      });
+        });
 
-      if (!result) {
+        if (result && result.student) {
+          student = result.student;
+        } else {
+          // If resultId matches a studentExam attempt ID directly
+          const se = await prisma.studentExam.findFirst({
+            where: { id: resultId },
+            include: {
+              student: { include: { user: true, college: true, department: true } },
+              exam: {
+                include: {
+                  subject: true,
+                  college: true,
+                  examQuestions: { include: { question: { include: { options: true } } } }
+                }
+              }
+            }
+          });
+          if (se && se.student && se.exam) {
+            student = se.student;
+            result = await prisma.result.findFirst({
+              where: { studentId: se.studentId, examId: se.examId },
+              include: {
+                student: { include: { user: true, college: true, department: true } },
+                exam: {
+                  include: {
+                    subject: true,
+                    college: true,
+                    examQuestions: { include: { question: { include: { options: true } } } }
+                  }
+                }
+              }
+            }) || {
+              id: se.id,
+              examId: se.examId,
+              studentId: se.studentId,
+              percentage: se.score,
+              status: se.score >= 40 ? 'pass' : 'fail',
+              performanceCategory: 'Competent',
+              exam: se.exam,
+              student: se.student
+            };
+          }
+        }
+      } else {
+        // Candidate student role restricted to their own result records
+        student = await prisma.student.findUnique({
+          where: { userId: req.user!.id },
+          include: { user: true, college: true, department: true }
+        });
+
+        if (!student) {
+          return res.status(403).json({ message: 'Student profile not found' });
+        }
+
+        result = await prisma.result.findFirst({
+          where: {
+            OR: [
+              { id: resultId },
+              { examId: resultId }
+            ],
+            studentId: student.id
+          },
+          include: {
+            exam: {
+              include: {
+                subject: true,
+                college: true,
+                examQuestions: { include: { question: { include: { options: true } } } }
+              }
+            }
+          }
+        });
+      }
+
+      if (!result || !student) {
         return res.status(404).json({ message: 'Evaluation results not found' });
       }
 
@@ -938,7 +1010,7 @@ export const StudentController = {
         examId: result.examId,
         examTitle: result.exam.title,
         subjectName: result.exam.subject ? result.exam.subject.subjectName : 'General Evaluation',
-        studentId: req.user!.id,
+        studentId: student.user?.id || student.id || req.user!.id,
         studentName: student.user?.name || student.registerNumber || 'Student',
         studentRollNo: student.registerNumber,
         score: finalScore,

@@ -2,6 +2,7 @@ import { Router } from 'express';
 import multer from 'multer';
 import { FacultyController } from '../controllers/facultyController';
 import { AdminController } from '../controllers/adminController';
+import { StudentController } from '../controllers/studentController';
 import { ExamExtensionController } from '../controllers/examExtensionController';
 import { PerformanceThresholdController } from '../controllers/performanceThresholdController';
 import { AdminAnalyticsController } from '../controllers/adminAnalyticsController';
@@ -29,6 +30,7 @@ router.get('/question-papers', FacultyController.getQuestionPapers);
 router.get('/departments', FacultyController.getDepartments);
 
 router.get('/results', FacultyController.getResults);
+router.get('/results/:id', StudentController.getResultDetails);
 router.get('/pending-students', FacultyController.getPendingStudents);
 router.post('/students/:id/approve', FacultyController.approveStudent);
 

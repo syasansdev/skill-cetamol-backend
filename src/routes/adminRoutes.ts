@@ -2,6 +2,7 @@ import { Router } from 'express';
 import multer from 'multer';
 import { AdminController } from '../controllers/adminController';
 import { FacultyController } from '../controllers/facultyController';
+import { StudentController } from '../controllers/studentController';
 import { ExamExtensionController } from '../controllers/examExtensionController';
 import { PerformanceThresholdController } from '../controllers/performanceThresholdController';
 import { AdminAnalyticsController } from '../controllers/adminAnalyticsController';
@@ -80,6 +81,7 @@ router.post('/faculty/:id/reset-password', AdminController.resetUserPassword);
 router.post('/reset-database', AdminController.resetDatabase);
 
 // Global Search & User Management
+router.get('/results/:id', requireRole(['admin']), StudentController.getResultDetails);
 router.get('/search-users', AdminController.searchUsers);
 router.get('/user/:id', AdminController.getUserById);
 router.get('/users/:id', AdminController.getUserById);
