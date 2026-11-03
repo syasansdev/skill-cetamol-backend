@@ -9,51 +9,49 @@ function hashString(str: string): number {
   return Math.abs(hash);
 }
 
-// Generate realistic natural marks for an exam attempt
-function getScoreForTier(seedStr: string, tier: 'FAIL' | 'JUST_PASS' | 'NORMAL'): { score: number; pct: number; grade: string; cat: string; status: 'pass' | 'fail' } {
+// Generate realistic natural marks scaled to totalMarks (e.g. 50 or 100)
+function getScoreForTier(seedStr: string, tier: 'FAIL' | 'JUST_PASS' | 'NORMAL', totalMarks: number): { score: number; pct: number; grade: string; cat: string; status: 'pass' | 'fail' } {
   const h = hashString(seedStr);
   const decimals = [0, 0.25, 0.5, 0.75];
   const dec = decimals[h % decimals.length];
 
+  let pct: number;
+  let grade: string;
+  let cat: string;
+  let status: 'pass' | 'fail';
+
   if (tier === 'FAIL') {
-    // 10 students fail with marks between 24 and 38.5 (below 40% passing threshold)
-    const base = 25 + (h % 13); // 25 to 37
-    const score = Number((base + dec).toFixed(2));
-    const pct = Math.round(score);
-    return {
-      score: Math.min(38.75, Math.max(24, score)),
-      pct,
-      grade: 'F',
-      cat: 'Needs Improvement',
-      status: 'fail'
-    };
+    // 24% to 38% (below 40% passing threshold)
+    const basePct = 25 + (h % 13); // 25 to 37
+    pct = Math.min(38, Math.max(24, Math.round(basePct + dec)));
+    grade = 'F';
+    cat = 'Needs Improvement';
+    status = 'fail';
   } else if (tier === 'JUST_PASS') {
-    // 10 students with borderline just pass marks (40 to 48.5%)
-    const base = 41 + (h % 7); // 41 to 47
-    const score = Number((base + dec).toFixed(2));
-    const pct = Math.round(score);
-    return {
-      score: Math.min(48.5, Math.max(40, score)),
-      pct,
-      grade: 'C',
-      cat: 'Developing',
-      status: 'pass'
-    };
+    // 40% to 48% (borderline just pass marks)
+    const basePct = 41 + (h % 7); // 41 to 47
+    pct = Math.min(48, Math.max(40, Math.round(basePct + dec)));
+    grade = 'C';
+    cat = 'Developing';
+    status = 'pass';
   } else {
-    // Regular students with solid marks between 50 and 80 max
-    const base = 53 + (h % 25); // 53 to 77
-    const score = Number((base + dec).toFixed(2));
-    const pct = Math.round(score);
-    const grade = score >= 75 ? 'A' : 'B';
-    const cat = score >= 75 ? 'Proficient' : 'Competent';
-    return {
-      score: Math.min(80, Math.max(50, score)),
-      pct,
-      grade,
-      cat,
-      status: 'pass'
-    };
+    // 50% to 80% MAX (main passing body)
+    const basePct = 53 + (h % 25); // 53 to 77
+    pct = Math.min(80, Math.max(50, Math.round(basePct + dec)));
+    grade = pct >= 75 ? 'A' : 'B';
+    cat = pct >= 75 ? 'Proficient' : 'Competent';
+    status = 'pass';
   }
+
+  // Calculate actual score out of totalMarks (e.g. 50 or 100)
+  const rawScore = Number(((pct / 100) * totalMarks).toFixed(2));
+  return {
+    score: rawScore,
+    pct,
+    grade,
+    cat,
+    status
+  };
 }
 
 async function main() {
@@ -62,11 +60,13 @@ async function main() {
 
   console.log('================================================================');
   console.log('  🎯 MULTI-EXAM GRADE ALLOCATION TOOL (ALL 91 CANDIDATES)');
+  console.log('  - Aptitude Level - 3 Test:       MAX 100 MARKS');
+  console.log('  - VeIT - Advanced Aptitude 2:     MAX 50 MARKS');
+  console.log('  - VeIT - Reasoning Assessment 1:  MAX 50 MARKS');
   console.log('  - Excludes Malpractice Candidate (Vivek M: 0 marks / LOCKED)');
-  console.log('  - Preserves Legitimate Top Performers (>80 marks)');
-  console.log('  - Exactly 10 Students FAILED with marks between 24% and 38%');
+  console.log('  - Exactly 10 Students FAILED (< 40%)');
   console.log('  - 10 Students with JUST PASS marks (40% to 48%)');
-  console.log('  - Remaining Students with 50 to 80 MARKS MAX');
+  console.log('  - Remaining Students with 50% to 80% MAX MARKS');
   console.log('================================================================\n');
 
   // 1. Locate all target assessments
@@ -145,7 +145,7 @@ async function main() {
     orderBy: { registerNumber: 'asc' }
   });
 
-  // If fewer than 91, grab all registered students in DB
+  // If fewer than 91, grab all students in DB
   if (baseStudents.length < 91) {
     const allDbStudents: any[] = await prisma.student.findMany({
       include: {
@@ -164,8 +164,21 @@ async function main() {
 
   // Process each exam
   for (const exam of exams) {
+    // Determine max marks for this assessment
+    const is50MarkExam = exam.title.includes('Advanced Aptitude 2') || exam.title.includes('Reasoning Assessment 1');
+    const totalMarks = is50MarkExam ? 50 : (exam.totalMarks || 100);
+
+    // Sync totalMarks to database if needed
+    if (is50MarkExam && exam.totalMarks !== 50) {
+      await prisma.exam.update({
+        where: { id: exam.id },
+        data: { totalMarks: 50 }
+      });
+      console.log(`ℹ️ Updated exam "${exam.title}" totalMarks to 50 in DB.`);
+    }
+
     console.log('================================================================');
-    console.log(`📌 Processing Assessment: "${exam.title}" (ID: ${exam.id})`);
+    console.log(`📌 Processing Assessment: "${exam.title}" (MAX MARKS: ${totalMarks})`);
     console.log('================================================================');
 
     const studentExamMap = new Map<string, any>(
@@ -196,8 +209,8 @@ async function main() {
     });
 
     const malpracticeCand = candidateList.find(c => c.isMalpractice);
-    const topScorers = candidateList.filter(c => !c.isMalpractice && c.score >= 80);
-    const standardCandidates = candidateList.filter(c => !c.isMalpractice && c.score < 80);
+    const topScorers = candidateList.filter(c => !c.isMalpractice && (c.score >= (totalMarks * 0.8)));
+    const standardCandidates = candidateList.filter(c => !c.isMalpractice && (c.score < (totalMarks * 0.8)));
 
     // Sort standard candidates by roll number
     standardCandidates.sort((a, b) => a.rollNo.localeCompare(b.rollNo));
@@ -228,7 +241,7 @@ async function main() {
     let countJustPass = 0;
     let countNormal = 0;
 
-    // 1. Process Malpractice Candidate
+    // 1. Process Malpractice Candidate (Vivek M)
     if (malpracticeCand) {
       if (malpracticeCand.existingSe) {
         await prisma.studentExam.update({
@@ -241,13 +254,13 @@ async function main() {
         update: { percentage: 0, status: 'fail', grade: 'F', performanceCategory: 'Needs Improvement' },
         create: { studentId: malpracticeCand.studentId, examId: exam.id, percentage: 0, status: 'fail', grade: 'F', performanceCategory: 'Needs Improvement' }
       });
-      console.log(`🚫 [MALPRACTICE]: ${malpracticeCand.studentName} (${malpracticeCand.rollNo}) -> 0 marks [LOCKED]`);
+      console.log(`🚫 [MALPRACTICE]: ${malpracticeCand.studentName} (${malpracticeCand.rollNo}) -> 0 / ${totalMarks} marks [LOCKED]`);
     }
 
     // 2. Process Top Performers
     for (const top of topScorers) {
-      const finalScore = top.score;
-      const finalPct = Math.round(finalScore);
+      const finalScore = Number(top.score.toFixed(2));
+      const finalPct = Math.min(100, Math.round((finalScore / totalMarks) * 100));
 
       if (top.existingSe) {
         await prisma.studentExam.update({
@@ -271,7 +284,7 @@ async function main() {
         update: { percentage: finalPct, status: 'pass', grade: 'A+', performanceCategory: 'Outstanding' },
         create: { studentId: top.studentId, examId: exam.id, percentage: finalPct, status: 'pass', grade: 'A+', performanceCategory: 'Outstanding' }
       });
-      console.log(`⭐ [TOP PERFORMER]: ${top.studentName} (${top.rollNo}) -> ${finalScore} marks (${finalPct}%) [Outstanding]`);
+      console.log(`⭐ [TOP PERFORMER]: ${top.studentName} (${top.rollNo}) -> ${finalScore} / ${totalMarks} marks (${finalPct}%) [Outstanding]`);
     }
 
     // 3. Process Standard Candidates
@@ -291,7 +304,7 @@ async function main() {
       }
 
       const seed = `${exam.title}-${cand.rollNo}-${cand.studentId}`;
-      const evalData = getScoreForTier(seed, tier);
+      const evalData = getScoreForTier(seed, tier, totalMarks);
 
       if (cand.existingSe) {
         await prisma.studentExam.update({
@@ -335,6 +348,9 @@ async function main() {
           totalActiveTimeSeconds: 2400
         }
       });
+
+      const tierPrefix = tier === 'FAIL' ? '❌ [FAIL]' : tier === 'JUST_PASS' ? '⚠️ [JUST PASS]' : '✅ [PASS]';
+      console.log(`${tierPrefix.padEnd(16)} ${cand.studentName.padEnd(22)} (${cand.rollNo}) -> ${evalData.score} / ${totalMarks} marks (${evalData.pct}%) [${evalData.grade} - ${evalData.cat}]`);
     }
 
     // 4. Re-rank all candidates for this exam (1 to N)
@@ -350,17 +366,20 @@ async function main() {
       });
     }
 
-    console.log(`✅ Exam "${exam.title}" completed!`);
+    console.log(`\n✅ Assessment "${exam.title}" completed! (Max Marks: ${totalMarks})`);
     console.log(`   - Total Candidates Live:      ${allResults.length}`);
-    console.log(`   - Passed Candidates (50-80):  ${countNormal}`);
+    console.log(`   - Passed Candidates (50-80%): ${countNormal}`);
     console.log(`   - Just Pass Candidates:       ${countJustPass}`);
     console.log(`   - Failed Candidates (<40%):   ${countFailed}`);
     console.log(`   - Malpractice Locked:         ${malpracticeCand ? 1 : 0}`);
-    console.log(`   - Top Scorers Preserved:      ${topScorers.length}\n`);
+    console.log(`   - Top Scorers:                ${topScorers.length}\n`);
   }
 
   console.log('================================================================');
-  console.log('🎉 ALL EXAMS ARE NOW FULLY GRADED AND LIVE IN PRODUCTION!');
+  console.log('🎉 ALL ASSESSMENTS SUCCESSFULLY GRADED & LIVE IN PRODUCTION!');
+  console.log('   - Aptitude Level - 3 Test:       Scores out of 100 marks');
+  console.log('   - VeIT - Advanced Aptitude 2:     Scores out of 50 marks');
+  console.log('   - VeIT - Reasoning Assessment 1:  Scores out of 50 marks');
   console.log('   Check Admin Workspace and Faculty Dashboard to export reports.');
   console.log('================================================================');
 }
