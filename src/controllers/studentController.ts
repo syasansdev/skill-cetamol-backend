@@ -1161,7 +1161,7 @@ export const StudentController = {
   logProctorEvent: async (req: AuthRequest, res: Response, next: NextFunction) => {
     try {
       const examId = req.params.id;
-      const { eventType, warningCount } = req.body;
+      const { eventType, warningCount, isImmediateLock, details } = req.body;
 
       const student = await prisma.student.findUnique({
         where: { userId: req.user!.id },
@@ -1186,23 +1186,28 @@ export const StudentController = {
         }
       });
 
+      const isMobileEvent = eventType === 'mobile_tab_or_app_switch';
+      const shouldLock = Boolean(isImmediateLock || isMobileEvent || (warningCount && warningCount >= 3));
+
       if (!studentExam) {
         studentExam = await prisma.studentExam.create({
           data: {
             studentId: student.id,
             examId,
-            status: 'started',
-            warningCount: warningCount || 0
+            status: shouldLock ? 'LOCKED' : 'started',
+            warningCount: shouldLock ? 3 : (warningCount || 0),
+            lockReason: shouldLock ? (isMobileEvent ? 'MOBILE_TAB_OR_APP_SWITCH' : 'MALPRACTICE_EXCEEDED') : null,
+            lockedAt: shouldLock ? new Date() : null
           }
         });
       } else {
         const updateData: any = {
-          warningCount: warningCount || studentExam.warningCount
+          warningCount: shouldLock ? 3 : (warningCount || studentExam.warningCount)
         };
 
-        if (warningCount >= 3) {
+        if (shouldLock) {
           updateData.status = 'LOCKED';
-          updateData.lockReason = 'MALPRACTICE_EXCEEDED';
+          updateData.lockReason = isMobileEvent ? 'MOBILE_TAB_OR_APP_SWITCH' : 'MALPRACTICE_EXCEEDED';
           updateData.lockedAt = new Date();
         }
 
@@ -1213,7 +1218,9 @@ export const StudentController = {
       }
 
       const actionMessage = studentExam.status === 'LOCKED'
-        ? `Student ${student.user.name} (${student.registerNumber}) exam LOCKED due to 3rd malpractice warning`
+        ? (isMobileEvent
+            ? `Student ${student.user.name} (${student.registerNumber}) exam IMMEDIATELY LOCKED due to mobile tab switch / home / recents button`
+            : `Student ${student.user.name} (${student.registerNumber}) exam LOCKED due to 3rd malpractice warning`)
         : `Student ${student.user.name} (${student.registerNumber}) triggered tab switch proctor warning ${warningCount}`;
 
       await prisma.activityLog.create({
@@ -1224,13 +1231,17 @@ export const StudentController = {
       });
 
       if (studentExam.status === 'LOCKED') {
+        const reasonDetail = isMobileEvent
+          ? 'leaving the exam screen or pressing Home/Recents on a mobile device.'
+          : 'multiple tab switches / malpractice warnings.';
+
         const admins = await prisma.user.findMany({ where: { role: 'admin' } });
         for (const admin of admins) {
           await prisma.notification.create({
             data: {
               userId: admin.id,
               title: 'Proctor Lock Triggered',
-              message: `Student ${student.user.name} (${student.registerNumber}) has been locked out of exam "${exam.title}" due to multiple tab switches.`
+              message: `Student ${student.user.name} (${student.registerNumber}) has been locked out of exam "${exam.title}" due to ${reasonDetail}`
             }
           });
         }
@@ -1245,7 +1256,7 @@ export const StudentController = {
               data: {
                 userId: faculty.userId,
                 title: 'Student Exam Locked (Proctoring)',
-                message: `Student ${student.user.name} (${student.registerNumber}) has been locked out of exam "${exam.title}" after 3 tab switches.`
+                message: `Student ${student.user.name} (${student.registerNumber}) has been locked out of exam "${exam.title}" due to ${reasonDetail}`
               }
             });
           }
