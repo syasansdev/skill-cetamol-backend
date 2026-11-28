@@ -71,7 +71,13 @@ router.post('/questions/generate-ai', FacultyController.generateAIQuestions);
 
 // Proctoring & Locked Examinations
 router.get('/locked-exams', AdminController.getLockedExams);
+router.post('/locked-exams/:id/unlock', AdminController.unlockExam);
+router.put('/locked-exams/:id/unlock', AdminController.unlockExam);
+router.post('/unlock-exam/:id', AdminController.unlockExam);
 router.put('/unlock-exam/:id', AdminController.unlockExam);
+router.post('/locked-exams/:id/revoke', AdminController.revokeExam);
+router.put('/locked-exams/:id/revoke', AdminController.revokeExam);
+router.post('/revoke-exam/:id', AdminController.revokeExam);
 router.put('/revoke-exam/:id', AdminController.revokeExam);
 
 export default router;

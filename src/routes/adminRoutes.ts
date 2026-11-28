@@ -39,7 +39,17 @@ router.post('/courses', requireRole(['admin', 'faculty']), AdminController.creat
 
 // Locked Examinations Proctor Monitor operations (accessible by Admin and Faculty)
 router.get('/locked-exams', requireRole(['admin', 'faculty']), AdminController.getLockedExams);
+
+// Unlock exam - supports both formats and methods (/locked-exams/:id/unlock and /unlock-exam/:id)
+router.post('/locked-exams/:id/unlock', requireRole(['admin', 'faculty']), AdminController.unlockExam);
+router.put('/locked-exams/:id/unlock', requireRole(['admin', 'faculty']), AdminController.unlockExam);
+router.post('/unlock-exam/:id', requireRole(['admin', 'faculty']), AdminController.unlockExam);
 router.put('/unlock-exam/:id', requireRole(['admin', 'faculty']), AdminController.unlockExam);
+
+// Revoke exam - supports both formats and methods (/locked-exams/:id/revoke and /revoke-exam/:id)
+router.post('/locked-exams/:id/revoke', requireRole(['admin', 'faculty']), AdminController.revokeExam);
+router.put('/locked-exams/:id/revoke', requireRole(['admin', 'faculty']), AdminController.revokeExam);
+router.post('/revoke-exam/:id', requireRole(['admin', 'faculty']), AdminController.revokeExam);
 router.put('/revoke-exam/:id', requireRole(['admin', 'faculty']), AdminController.revokeExam);
 
 // Test Time Extension operations (Admin & Invigilator)
